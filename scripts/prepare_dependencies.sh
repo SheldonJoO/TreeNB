@@ -81,15 +81,20 @@ if not schemes:
 p = schemes[0]
 s = open(p, encoding='utf-8').read()
 
-# 从任意 BuildableReference 里找 BuildableName="TreeNB.app" 的（含自闭合与成对两种）
+# 从任意 BuildableReference 里找主 App 的（含自闭合与成对两种）
 refs = re.findall(r'<BuildableReference\b[^>]*?(?:/>|</BuildableReference>)', s, re.S)
+print('[dbg] scheme 中的 BuildableReference:')
+for r in refs:
+    bn = re.search(r'BuildableName="([^"]*)"', r)
+    print('   -', bn.group(1) if bn else '(no name)')
 app_ref = None
 for r in refs:
-    if 'BuildableName="TreeNB.app"' in r:
+    bn = re.search(r'BuildableName="([^"]*)"', r)
+    if bn and bn.group(1).endswith('.app') and 'Widget' not in bn.group(1):
         app_ref = r
         break
 if app_ref is None:
-    print('[error] scheme 中找不到 TreeNB.app 的 BuildableReference')
+    print('[error] scheme 中找不到任何 .app 的 BuildableReference')
     sys.exit(1)
 # 规范化为自闭合标签（去掉可能的 </BuildableReference>）
 app_ref = re.sub(r'</BuildableReference>\s*$', '/>', app_ref).strip()
