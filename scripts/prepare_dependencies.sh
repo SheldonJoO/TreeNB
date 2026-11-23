@@ -80,13 +80,11 @@ if not schemes:
     print('[error] 未找到 TreeNB.xcscheme')
     sys.exit(1)
 p = schemes[0]
-print('[dbg] scheme path:', p)
 s = open(p, encoding='utf-8').read()
 
 # 从任意 BuildableReference 里找主 App 的（含自闭合与成对两种）
 refs = re.findall(r'<BuildableReference\b[^>]*?(?:/>|</BuildableReference>)', s, re.S)
-print('[dbg] scheme 前 2500 字符:')
-print(s[:2500])
+print('[dbg] BuildableReference 数:', len(refs))
 app_ref = None
 for r in refs:
     bn = re.search(r'BuildableName="([^"]*)"', r)

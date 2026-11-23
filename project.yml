@@ -221,12 +221,13 @@ schemes:
   TreeNB:
     build:
       targets:
-        LiveContainerShared: [debug, release]
-        LiveContainerSwiftUI: [debug, release]
-        TreeNB: [debug, release]
-        AltWidgetExtension: [debug, release]
+        # 必须用合法 BuildType（all/testing/indexing/none），
+        # 写 [debug, release] 会被 compactMap 过滤成空 → buildFor*=NO → 无 ArchiveAction
+        LiveContainerShared: all
+        LiveContainerSwiftUI: all
+        TreeNB: all
+        AltWidgetExtension: all
     run:
       target: TreeNB
-    # xcodegen 的 archive action 不接受 target 字段：只要出现 archive 键，
-    # 就对 build.targets 中标记为 release 的 target 生成 ArchiveAction。
-    archive: {}
+    archive:
+      config: Release
