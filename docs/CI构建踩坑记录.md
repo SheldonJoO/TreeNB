@@ -88,6 +88,9 @@ xcodegen 的 `framework: LiveContainerShared.framework` 只写 link/embed，**�
 ### 13. `LCBootstrap.m:827:6: Unterminated conditional directive`
 A4 补丁只在 `LCOpenSideStore` 分支的 `if` 前插了 `#if 0`，忘了补 `#endif`，预处理指令不配对。修复：用大括号深度匹配定位整个 if 块（从 `if(...)` 到配对的 `}`），一起包进 `#if 0 ... #endif`；本地用原始文件验证过 `#if`/`#endif` 计数 7:7。经验：物理删/屏蔽代码时，块边界必须用括号匹配算准，别只改首行。
 
+### 14. `duplicate symbol '_orig_dyld_fcntl' / '_orig_dyld_mmap'`（链接阶段）
+第一次走到 `Ld LiveContainerShared.framework`，报 `Dyld.o` 与 `dyld_bypass_validation.o` 重复定义。根因：`dyld_bypass_validation.h` 里这两个函数指针写成 `int (*orig_dyld_fcntl)(...);`（无 `extern`），是 C 的 tentative definition，多个 `.m` import 后各生成一份。原工程 Xcode 16 默认合并 tentative defs，xcodegen 工程设置不同变成强符号冲突。修复：A4b 补丁给两个声明加 `extern`，变成纯声明；真定义仍在 `dyld_bypass_validation.m`。经验：C 头文件里的全局变量/函数指针声明必须写 `extern`。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

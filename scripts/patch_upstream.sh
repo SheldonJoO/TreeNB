@@ -122,6 +122,28 @@ else:
 PY
 fi
 
+# A4b. dyld_bypass_validation.h 里两个函数指针声明缺少 extern，是 C tentative
+#      definition。多个 .m import 后会各自生成一份，xcodegen 工程下触发
+#      "duplicate symbol '_orig_dyld_fcntl' / '_orig_dyld_mmap'"。加 extern 变纯声明。
+if [ -f "$LC/LiveContainer/dyld_bypass_validation.h" ]; then
+  python3 - "$LC/LiveContainer/dyld_bypass_validation.h" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+changed = False
+for decl in ('int (*orig_dyld_fcntl)(int fildes, int cmd, void *param);',
+             'int (*orig_dyld_mmap)(int fildes, int cmd, void *param);'):
+    if decl in s and 'extern ' + decl not in s:
+        s = s.replace(decl, 'extern ' + decl, 1)
+        changed = True
+if changed:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  dyld_bypass_validation.h: orig_dyld_* 已加 extern，消除 tentative definition')
+else:
+    print('  dyld_bypass_validation.h: 无需改')
+PY
+fi
+
 # A5. SideStoreHooks.m bundle identity swizzle 屏蔽（宿主即本体，无需伪装）
 if [ -f "$LC/SideStoreSupport/SideStoreHooks.m" ]; then
   python3 - "$LC/SideStoreSupport/SideStoreHooks.m" <<'PY'
