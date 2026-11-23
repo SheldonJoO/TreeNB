@@ -156,7 +156,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         groupRoot = [LCSharedUtils appGroupPath];
     }
     // ★ 侧载重签后 App Group 极可能完全拿不到（groupRoot == nil）：
-    //   此时 groupBundleRoot 也是 nil，@[self.bundleRoot, self.groupBundleRoot]
+    //   此时 groupBundleRoot 也是 nil，数组字面量塞它
     //   会因插入 nil 抛 NSInvalidArgumentException，Swift 侧 do/catch 捕获不了，
     //   表现就是「点容器 Tab 瞬间闪退」。fallback 到 Documents，保证容器始终可用。
     NSURL *effectiveGroupRoot = groupRoot ?: docs;
