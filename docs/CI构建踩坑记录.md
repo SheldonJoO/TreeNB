@@ -131,6 +131,10 @@ SwiftUI 语法修好后只剩这一条真实错误。`LCUtils.m` import 了 Swif
 公开头修好后，日志显示 `LCEngineEntry.h` 确实已经复制进 `LiveContainerShared.framework/Headers/`，但 Clang 仍报 umbrella header not found，并给出 note：module 声明缺少 `framework` 限定符。根因：我们手写的是普通 `module LiveContainerShared { ... }`，而 umbrella header 路径解析依赖 framework module 语义。
 修复：modulemap 首行改成 `framework module LiveContainerShared { ... }`。经验：framework 的 modulemap 必须以 `framework module` 开头，否则即使头文件在正确位置，Clang 也不会按 framework 规则解析 umbrella header。
 
+### 25. `compiling for iOS 15.0, but module 'SemanticVersion' has a minimum deployment target of iOS 16.0`
+modulemap 修好后 Archive 走到主 App 源码编译才暴露：`project.yml` 里 SemanticVersion 用 `from: 0.4.0`，SPM 自动解析到更新的版本，其 Package.swift 声明最低 iOS 16；而 TreeNB 主 App 是 iOS 15。
+修复：改成 `exactVersion: 0.4.0`（该版本 Package.swift 未声明 platforms，兼容 iOS 15）。经验：`from:` 不是锁定，CI 每次可能解析到新版本并改变最低系统要求；主 App 部署目标较低时，所有 SPM 依赖都应核对并 pin 到兼容版本。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

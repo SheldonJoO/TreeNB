@@ -88,7 +88,10 @@ packages:
     from: 4.0.8
   SemanticVersion:
     url: https://github.com/SwiftPackageIndex/SemanticVersion
-    from: 0.4.0
+    # 必须 pin 0.4.0：from: 0.4.0 会解析到新版（最低 iOS16），
+    # 而 TreeNB 主 App 部署目标是 iOS15，会报
+    # "compiling for iOS 15.0, but module 'SemanticVersion' has a minimum deployment target of iOS 16.0"。
+    exactVersion: 0.4.0
   CodeSignKit:
     url: https://github.com/mahee96/CodeSignKit
     branch: main
