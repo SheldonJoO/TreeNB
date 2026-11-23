@@ -167,11 +167,45 @@ targets:
           - voip
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        # 文档类型（IPA 导入必需）：原版 openSSS Info.plist 声明了
+        # com.apple.itunes.ipa，但 xcodegen 的 info.properties 覆盖后只剩 All Files，
+        # UIDocumentPicker 按 IPA UTI 过滤时找不到声明 → 选不了 .ipa 文件。
+        # 这里把 IPA + pairing 导入类型补回，并保留 All Files 兜底。
         CFBundleDocumentTypes:
+          - CFBundleTypeName: iOS App
+            CFBundleTypeIconFiles: []
+            LSItemContentTypes:
+              - com.apple.itunes.ipa
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+          - CFBundleTypeName: Mobile Device Pairing
+            CFBundleTypeIconFiles: []
+            LSItemContentTypes:
+              - org.openssai.mobiledevicepairing
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
           - CFBundleTypeName: All Files
             LSHandlerRank: Owner
             LSItemContentTypes:
               - public.item
+        UTImportedTypeDeclarations:
+          - UTTypeConformsTo:
+              - public.data
+            UTTypeDescription: iOS App
+            UTTypeIconFiles: []
+            UTTypeIdentifier: com.apple.itunes.ipa
+            UTTypeTagSpecification:
+              public.mime-type: application/x-ios-app
+              public.filename-extension: ipa
+          - UTTypeConformsTo:
+              - com.apple.plist
+            UTTypeDescription: Mobile Device Pairing
+            UTTypeIconFiles: []
+            UTTypeIdentifier: org.openssai.mobiledevicepairing
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - mobiledevicepairing
+                - mobiledevicepair
         LSSupportsOpeningDocumentsInPlace: true
         NFCReaderUsageDescription: The guest app is requesting for this permission.
         NSAlarmKitUsageDescription: The guest app is requesting for this permission.

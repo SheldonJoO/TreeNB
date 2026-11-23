@@ -231,38 +231,87 @@ fi
 # ---------------------------------------------------------------------------
 log "B. openSSS 侧接入容器 Tab / 路由 / Widget"
 
-# B1. ShellTabBarController：加容器 Tab（幂等：检测 ContainerTab 字样）
+# B1. ShellTabBarController：加容器 Tab
+# 历史坑：早期用正则匹配 `profileNav]` / `self.viewControllers` 插入数组，
+# 但上游真实变量是 profileNavigationController、且赋值是裸 `viewControllers = [...]`，
+# 两个正则都匹配失败 → 补丁静默失效 → 打出来的包是纯 openSSS，没有容器 Tab。
+# 现在改成完整多行字符串锚点精确替换，每步校验锚点存在，找不到直接报错退出（set -e），
+# 绝不让"看着成功、实际没改"的情况再次发生。
 SHELL="$SSS/AltStore/Shell/ShellTabBarController.swift"
-if [ -f "$SHELL" ] && ! grep -q "ContainerTabViewController" "$SHELL"; then
+if [ -f "$SHELL" ]; then
   python3 - "$SHELL" <<'PY'
-import sys, re
+import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-# 在最后一个 lazy var nav 定义后插入容器 nav
-insert = '''
-    // TreeNB: 第四个 Tab —— 容器（LiveContainer 多开）
-    lazy var containerNav: UINavigationController = {
-        let vc = ContainerTabViewController()
-        vc.title = "容器"
-        return UINavigationController(rootViewController: vc)
+orig = s
+changes = []
+
+# 锚点 1：profileNavigationController 属性块之后插入容器 nav
+a1 = '''    private lazy var profileNavigationController: UINavigationController = {
+        makeNavigationController(rootViewController: profileViewController)
     }()
 '''
-# 找 class 内第一个 "lazy var" 块之前插入（位置不影响，Swift lazy 无序）
-idx = s.find('lazy var')
-if idx == -1: idx = s.find('{', s.find('class ShellTabBarController')) + 1
-s = s[:idx] + insert + '\n' + s[idx:]
-# viewControllers 数组加 containerNav
-s2 = re.sub(r'(viewControllers\s*=\s*\[[^\]]*?)(profileNav)(\])',
-            r'\1containerNav, \2\3', s, count=1)
-if s2 == s:
-    # 兜底：找 appsNav/locationNav 那行
-    s2 = re.sub(r'(self\.viewControllers\s*=\s*\[[^\]]*\])',
-                lambda m: m.group(1).replace(']', ', containerNav]'), s, count=1)
-open(p, 'w', encoding='utf-8').write(s2)
-print('  ShellTabBarController.swift: 已插入容器 Tab（请人工核对数组顺序）')
+prop = '''
+    // TreeNB: 第四个 Tab —— 容器（LiveContainer 多开侧载）
+    private lazy var containerNav: UINavigationController = {
+        makeNavigationController(rootViewController: ContainerTabViewController())
+    }()
+'''
+if 'private lazy var containerNav' not in s:
+    if a1 not in s:
+        sys.stderr.write('FATAL[B1]: 属性锚点未找到，上游 ShellTabBarController 结构已变\n')
+        sys.exit(2)
+    s = s.replace(a1, a1 + prop, 1)
+    changes.append('containerNav 属性')
+
+# 锚点 2：profileNavigationController.tabBarItem 之后插入容器 tabBarItem
+a2 = '''        profileNavigationController.tabBarItem = UITabBarItem(
+            title: NSLocalizedString("Me", comment: ""),
+            image: UIImage(systemName: "person.crop.circle.fill"),
+            tag: 2)
+'''
+tab = '''
+        containerNav.tabBarItem = UITabBarItem(
+            title: "容器",
+            image: UIImage(systemName: "shippingbox.fill"),
+            tag: 3)
+'''
+if 'containerNav.tabBarItem' not in s:
+    if a2 not in s:
+        sys.stderr.write('FATAL[B1]: tabBarItem 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a2, a2 + tab, 1)
+    changes.append('containerNav tabBarItem')
+
+# 锚点 3：viewControllers 数组加入 containerNav（这就是之前失效的关键行）
+a3 = '        viewControllers = [appsNavigationController, locationNavigationController, profileNavigationController]'
+a3new = '        viewControllers = [appsNavigationController, locationNavigationController, containerNav, profileNavigationController]'
+if a3new not in s:
+    if a3 not in s:
+        sys.stderr.write('FATAL[B1]: viewControllers 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a3, a3new, 1)
+    changes.append('viewControllers += containerNav')
+
+# 锚点 4：applyTheme 里同步 tintColor（非致命）
+a4 = '        profileNavigationController.navigationBar.tintColor = ShellTheme.accentColor\n'
+a4new = a4 + '        containerNav.navigationBar.tintColor = ShellTheme.accentColor\n'
+if 'containerNav.navigationBar.tintColor' not in s:
+    if a4 in s:
+        s = s.replace(a4, a4new, 1)
+        changes.append('applyTheme tintColor')
+
+if s != orig:
+    open(p, 'w', encoding='utf-8').write(s)
+print('  ShellTabBarController.swift: ' + ('；'.join(changes) if changes else '无需改（已幂等）'))
 PY
+  # 构建期铁证校验：viewControllers 行必须含 containerNav，否则直接失败
+  grep -q 'viewControllers = \[appsNavigationController, locationNavigationController, containerNav, profileNavigationController\]' "$SHELL" \
+    || { echo "FATAL[B1]: 容器 Tab 未进入 viewControllers，拒绝继续构建" >&2; exit 2; }
+  ok "ShellTabBarController.swift: 容器 Tab 已挂载并通过校验"
 else
-  warn "ShellTabBarController.swift 未改（文件缺失或已含容器 Tab）"
+  echo "FATAL[B1]: 缺少 $SHELL，无法挂载容器 Tab" >&2
+  exit 2
 fi
 
 # B2. Widget bundle 并入 TreeLaunchWidget

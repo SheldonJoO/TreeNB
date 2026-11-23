@@ -28,6 +28,15 @@ if ! echo "$BGMODES" | grep -q "location"; then
 fi
 echo "  UIBackgroundModes 含 location，校验通过"
 
+# IPA 文档类型：UIDocumentPicker 按 com.apple.itunes.ipa 过滤，缺声明则选不了 .ipa 文件。
+IPA_DECL=$(/usr/libexec/PlistBuddy -c "Print :UTImportedTypeDeclarations" "$APP/Info.plist" 2>/dev/null || true)
+if ! echo "$IPA_DECL" | grep -q "com.apple.itunes.ipa"; then
+  echo "致命错误: UTImportedTypeDeclarations 缺少 com.apple.itunes.ipa！容器页 UIDocumentPicker 按此 UTI 过滤，缺声明将无法选择 .ipa 文件。" >&2
+  echo "请在 project.yml 的 info.properties 补回 UTImportedTypeDeclarations / CFBundleDocumentTypes 的 IPA 声明后重新构建。" >&2
+  exit 1
+fi
+echo "  UTImportedTypeDeclarations 含 com.apple.itunes.ipa，校验通过"
+
 STORYBOARD=$(/usr/libexec/PlistBuddy -c "Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneStoryboardFile" "$APP/Info.plist" 2>/dev/null || true)
 if [ "$STORYBOARD" != "Main" ]; then
   echo "致命错误: SceneManifest 缺少 UISceneStoryboardFile=Main！openSSS 的 SceneDelegate 不手动创建 window/root，靠 Main.storyboard 自动交接；缺此键启动后全黑屏。" >&2
