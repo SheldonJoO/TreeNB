@@ -29,14 +29,16 @@ TreeNB 的核心改造：**反转主从关系**
 
 ## 工程状态
 
-✅ **代码骨架 + 适配层完成**（2026-11-23）—— 已落地：
-- xcodegen 工程定义（4 targets）
-- LC 引擎适配桥接（framework 入口 + guest 启停 API）
-- 容器 Tab 全套 SwiftUI（导入 / 列表 / 启动 / 返回）
-- 深链路由、Widget 并入、自动改造补丁脚本、CI、Spike 探针
+✅ **Spike 包已在 GitHub Actions 构建成功**（2026-11-23，run `45200991926`）——产物 `TreeNB-spike` 已解包校验：
+- 主 App `com.openssai.app`，显示名「树应用」，最低 iOS 15
+- `Frameworks/`：`LiveContainerShared.framework`、`LiveContainerSwiftUI.framework`、`OpenSSL.framework`
+- `PlugIns/AltWidgetExtension.appex`：`com.apple.widgetkit-extension` 小组件已并入同一个包
+- 全程 CI 编译出包，本机无需 Xcode 16.4
 
-⏳ **待真机验证**：LC 引擎作为内嵌 framework 的 swizzle 冲突（Spike 三问，见下）
-🔲 **未做**：Xcode 工程本体生成（需 Xcode 16.4）、完整业务代码铺开、多版本回归
+✅ **已落地**：xcodegen 工程定义（4 targets）、LC 引擎适配桥接、容器 Tab SwiftUI（导入 / 列表 / 启动 / 返回）、深链路由、自动改造补丁、CI、Spike 自检页
+
+⏳ **待真机验证**：把未签名 Spike IPA 侧载到 iPhone，打开容器页右上角 🧪，看三问红绿勾（LC 作为内嵌 framework 的 swizzle / guest 往返）
+🔲 **未做**：正式签名包（release + Secrets）、业务功能铺开、多版本回归
 
 ## 目录
 
