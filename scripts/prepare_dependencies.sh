@@ -67,41 +67,41 @@ if command -v xcodegen >/dev/null 2>&1; then
   xcodegen generate
   ok "TreeNB.xcodeproj 已生成"
 
-  # 4b. 兜底：确保 scheme 含 ArchiveAction
-  # xcodegen 不同版本对空 archive:{} 的处理不一致，早期版本可能不生成
-  # ArchiveAction，导致 xcodebuild archive 直接报 "not configured for archive"。
-  # 这里校验并在缺失时注入一个指向主 App 的 ArchiveAction。
+  # 4b. 兜底：强制重建 TreeNB scheme 的 ArchiveAction
+  # xcodegen 的 archive:{} 在部分版本生成的 ArchiveAction 没有 BuildableEntry，
+  # xcodebuild archive 会报 "Scheme is not currently configured for the archive action"。
+  # 这里从 BuildAction 段抓 TreeNB.app 的 BuildableReference，重建完整 ArchiveAction。
   python3 - <<'PYEOF'
 import glob, os, re, sys
-schemes = glob.glob('TreeNB.xcodeproj/xcshareddata/xcschemes/*.xcscheme') + \
-          glob.glob('TreeNB.xcodeproj/xcuserdata/*/xcschemes/*.xcscheme')
-target = [p for p in schemes if os.path.basename(p) == 'TreeNB.xcscheme']
-if not target:
-    print('[warn] 未找到 TreeNB.xcscheme，跳过 ArchiveAction 校验')
+# xcodebuild CLI 只认 shared scheme
+schemes = glob.glob('TreeNB.xcodeproj/xcshareddata/xcschemes/TreeNB.xcscheme')
+if not schemes:
+    print('[warn] 未找到 shared scheme TreeNB.xcscheme，跳过')
     sys.exit(0)
-p = target[0]
+p = schemes[0]
 s = open(p, encoding='utf-8').read()
-if '<ArchiveAction' in s:
-    print('[ ok ] TreeNB.xcscheme 已含 ArchiveAction')
-    sys.exit(0)
-# 找一个 application target 的 BuildableReference 块
-m = re.search(r'<BuildableReference[^>]*BuildableName="TreeNB\.app"[^>]*/>', s)
-if not m:
-    m = re.search(r'<BuildableReference\b[^>]*/>', s)
-if not m:
-    print('[warn] 无 BuildableReference，无法注入 ArchiveAction')
-    sys.exit(0)
-ref = m.group(0)
-# 提取 BlueprintIdentifier / BuildableName / BlueprintName
-def attr(a):
-    x = re.search(a + r'="([^"]*)"', ref)
-    return x.group(1) if x else ''
-entry = (f'      <BuildableEntry '
-         f'BuildableIdentifier="primary" '
-         f'BlueprintIdentifier="{attr("BlueprintIdentifier")}" '
-         f'BuildableName="{attr("BuildableName")}" '
-         f'BlueprintName="{attr("BlueprintName")}" '
-         f'ReferencedContainer="container:TreeNB.xcodeproj"/>')
+
+# 从任意 BuildableReference 里找 BuildableName="TreeNB.app" 的（含自闭合与成对两种）
+refs = re.findall(r'<BuildableReference\b[^>]*?(?:/>|</BuildableReference>)', s, re.S)
+app_ref = None
+for r in refs:
+    if 'BuildableName="TreeNB.app"' in r:
+        app_ref = r
+        break
+if app_ref is None:
+    print('[error] scheme 中找不到 TreeNB.app 的 BuildableReference')
+    sys.exit(1)
+# 规范化为自闭合标签（去掉可能的 </BuildableReference>）
+app_ref = re.sub(r'</BuildableReference>\s*$', '/>', app_ref).strip()
+
+entry = ('         <BuildActionEntry\n'
+         '            buildForTesting="YES"\n'
+         '            buildForRunning="YES"\n'
+         '            buildForProfiling="YES"\n'
+         '            buildForArchiving="YES"\n'
+         '            buildForAnalyzing="YES">\n'
+         f'            {app_ref}\n'
+         '         </BuildActionEntry>')
 archive = ('   <ArchiveAction\n'
            '      buildConfiguration="Release"\n'
            '      revealArchiveInOrganizer="YES">\n'
@@ -109,9 +109,15 @@ archive = ('   <ArchiveAction\n'
            f'{entry}\n'
            '      </BuildActionEntries>\n'
            '   </ArchiveAction>\n')
-s = s.replace('</Scheme>', archive + '</Scheme>')
-open(p, 'w', encoding='utf-8').write(s)
-print('[ ok ] 已为 TreeNB.xcscheme 注入 ArchiveAction（兜底）')
+
+# 移除已有的 ArchiveAction（自闭合或成对），再注入新的
+s2 = re.sub(r'\s*<ArchiveAction\b[^>]*?/>', '', s)
+s2 = re.sub(r'\s*<ArchiveAction\b.*?</ArchiveAction>', '', s2, flags=re.S)
+s2 = s2.replace('</Scheme>', archive + '</Scheme>')
+open(p, 'w', encoding='utf-8').write(s2)
+# 打印校验信息便于日志核对
+bp = re.search(r'BlueprintIdentifier="([^"]*)"', app_ref)
+print('[ ok ] ArchiveAction 已重建，指向 TreeNB.app (Blueprint=' + (bp.group(1) if bp else '?') + ')')
 PYEOF
 else
   warn "本机无 xcodegen —— CI runner 上会安装。本地可手动：brew install xcodegen && xcodegen generate"
