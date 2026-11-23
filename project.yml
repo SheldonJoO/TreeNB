@@ -172,6 +172,11 @@ targets:
         embed: true
       - target: LiveContainerSwiftUI
         embed: true
+      # TreeWidget 已并入 AltWidgetExtension，必须显式声明 embed，
+      # xcodegen 才会生成 Embed App Extensions 阶段把 .appex 放进 PlugIns/。
+      # 只把它写进 scheme 的 Build/Archive entries 只会"编译"扩展，不会嵌入 IPA。
+      - target: AltWidgetExtension
+        embed: true
       # openSSS 原有的 SPM 依赖（主壳签名/续签/应用源全靠这些）
       - package: SideSign
         product: SideSign

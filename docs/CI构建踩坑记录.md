@@ -159,6 +159,10 @@ TreeNB 的 `project.yml` 把 `upstream/openSSS/SideStore` 整棵树编进主 App
 patch_upstream.sh §6 把 DeviceGateway 的 IDevice.xcframework 从"作者本机路径"换成官方 release URL。上游 Package.swift 注释已经警告：该 release 编译时没开 `location_simulation` feature，头文件声明了但二进制里没有这 4 个符号。主 App 链接时暴露。
 修复：新增 `Sources/Compat/location_simulation_stubs.c`，提供无副作用的 C 桩（new 返回静态哑句柄并置 NULL error，set/clear 返回 NULL，free 空操作），由 patch 挂进主 App 源码树。定位模拟不是 TreeNB 单包闭环的必需能力；将来换成带该 feature 的 xcframework 时删掉桩即可。经验：上游注释里的"本地构建才有" warning 是定时炸弹，CI 必须落实兼容桩或换二进制。
 
+### 32. IPA 里没有 PlugIns/AltWidgetExtension.appex
+Spike #55 首次构建成功，但解包发现 `Payload/TreeNB.app/` 里只有两个 LC framework 和 OpenSSL，没有小组件。原因：scheme 里虽然列了 `AltWidgetExtension`，那只保证扩展被**编译**；xcodegen 需要在主 App 的 dependencies 里写 `- target: AltWidgetExtension / embed: true` 才会生成 Embed App Extensions 阶段。
+修复：TreeNB.dependencies 加该依赖。经验：xcodegen 的 scheme entries ≠ app extension embed；检查 IPA 的 `PlugIns/` 目录比看编译日志更可靠。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
