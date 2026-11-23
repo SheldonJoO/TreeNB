@@ -264,6 +264,14 @@ targets:
         excludes:
           - 'Info.plist'
           - '**/*.entitlements'
+      # 原工程 AltWidgetExtension 的 fileSystemSynchronizedGroups = Shared + AltWidget，
+      # 还编入 SideStore 的 WidgetData/pagination 子集（见 pbxproj exception set
+      # A8EECF4A）。xcodegen 没有 FileSystemSynchronized，必须显式列出。
+      - path: upstream/openSSS/Shared
+        excludes:
+          - 'Extensions/ALTApplication+AltStoreApp.swift'   # 依赖主 App，Widget 排外
+      - path: upstream/openSSS/SideStore/Widget/WidgetData
+      - path: upstream/openSSS/SideStore/Utils/pagination
     info:
       path: config/AltWidget-Info.plist
       properties:
