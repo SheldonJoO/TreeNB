@@ -59,7 +59,7 @@ fi
 
 # 3. 结构性改造（删除跳转分支 / 身份归一 / Widget 并入 / 挂载适配源码）
 log "执行上游改造补丁"
-./scripts/patch_upstream.sh
+bash ./scripts/patch_upstream.sh
 
 # 4. 生成工程
 if command -v xcodegen >/dev/null 2>&1; then
