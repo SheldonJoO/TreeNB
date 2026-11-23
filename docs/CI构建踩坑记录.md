@@ -123,6 +123,10 @@ SwiftUI 语法修好后只剩这一条真实错误。`LCUtils.m` import 了 Swif
 头文件和语法全部通过后，编译进到链接阶段才暴露：`LCUtils.m` 的 `isTXMScriptRequired` 调用 IOKit，`unarchive.o` 调用 libarchive，而 xcodegen 工程只显式链了 SwiftUI。上游 `project.pbxproj` 的 Frameworks build phase 里其实有 `IOKit.framework` 和 `libarchive.tbd`，只是我们没有把这两条还原进 `project.yml`。
 修复：`LiveContainerSwiftUI.dependencies` 加 `- sdk: IOKit.framework` 与 `- sdk: libarchive.tbd`。经验：从 pbxproj 迁到 xcodegen 时，除了源码和头文件，Frameworks build phase 的每一项都要逐个对齐；编译期不报错的系统库缺失，通常要等到链接期才现形。
 
+### 23. `module.modulemap:4:21: umbrella header 'LCEngineEntry.h' not found`
+链接库补齐后，Archive 走到主 App 编译才报：Swift 侧 `import LiveContainerShared` 时 framework 的 modulemap 找不到 umbrella header。根因：`LiveContainerShared` 的第一条 sources 用 `excludes: ['**/*.h']` 排除了整棵树头文件，而我把 `LCEngineEntry.h` 写成 target 顶层 `publicHeaders:`——xcodegen 并不认这个键，header 没进 framework/Headers；modulemap 被复制进 `Modules/`，Clang 按 framework module 规则去 `Headers/` 找 umbrella，自然找不到。
+修复：在 `sources` 里单独加 `path: .../TreeNBBridge/include` + `headerVisibility: public` + `buildPhase: headers`。经验：xcodegen 的 public headers 是 **source entry 的属性**（`headerVisibility`），不是 target 顶层 `publicHeaders`；排除 `**/*.h` 后必须把要公开的头文件重新加回来。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

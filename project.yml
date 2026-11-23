@@ -200,10 +200,13 @@ targets:
       - path: upstream/TreeNewBee/litehook/src
         excludes:
           - '**/*.h'
-      # patch_upstream.sh 把 LCEngineEntry.m + include/ 挂到 TreeNBBridge/ 下
-      # 所以这里的递归 source 已含 framework 新入口，无需再列 Sources/
-    publicHeaders:
+      # patch_upstream.sh 把 LCEngineEntry.m + include/ 挂到 TreeNBBridge/ 下。
+      # 上面的 `**/*.h` 排除了整棵树的头文件，必须单独把桥接 include/ 声明为
+      # public header，否则 modulemap 里的 umbrella header 不会进入 framework/Headers，
+      # Swift 侧 import LiveContainerShared 会报 "umbrella header not found"。
       - path: upstream/TreeNewBee/LiveContainer/TreeNBBridge/include
+        headerVisibility: public
+        buildPhase: headers
     settings:
       base:
         PRODUCT_NAME: LiveContainerShared
