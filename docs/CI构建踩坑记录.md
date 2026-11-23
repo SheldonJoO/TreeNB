@@ -54,6 +54,17 @@ openSSS 真实资源路径是 `AltStore/Core/Resources/Colors.xcassets`，且已
 ### 5. `Multiple commands produce conflicting outputs`（storyboard/xib 冲突）
 openSSS 用目录隔离 iOS/tvOS 资源（如 `AltStore/News/tvOS/NewsCollectionViewCell.xib` 与 iOS 版同名），xcodegen 递归 `AltStore/` 把 tvOS 版也编进去，输出同名 nib。修复：在 `AltStore` 和 `SideStore` 的 source excludes 里加 `**/tvOS/**`。
 
+### 6. `no such module 'SideSign'`（xcodegen 工程漏挂 SPM 依赖）
+原 `AltStore.xcodeproj` 用 Swift Package 管理签名栈，但我们的 xcodegen 工程只收 `AltStore/SideStore/Shared` 源码，导致 `import SideSign` 失败。照抄原 pbxproj 的 `packageReferences` 到 `project.yml`：
+- 本地包：`Dependencies/SideSign`、`Dependencies/minimuxer`；
+- 主 App 链 MarkdownKit(from 1.7.3)、KeychainAccess(branch master)、Nuke(exact 12.9.0)、Starscream(from 4.0.8)、SemanticVersion(from 0.4.0)；
+- Widget 链 CodeSignKit(branch main)；
+- 工程级 `SYSTEM_HEADER_SEARCH_PATHS` 指向 `Dependencies/SideSign/Dependencies`。
+注意 xcodegen 的精确版本键是 `exactVersion`，不是 `exact`。
+
+### 7. `local binary target 'IDevice' ... does not contain a binary artifact`
+`Dependencies/minimuxer/DeviceGateway/Package.swift` 把 `IDevice.xcframework` 指向 `../../../local/idevice/swift/IDevice.xcframework`——该目录按上游注释**故意不进 git**，只存在于作者构建机，CI 必然失败。上游同一文件里保留了官方 release 的 `url` + `checksum`（注释掉的备选）。修复：`scripts/patch_upstream.sh` 的 A6 步骤把 `path:` 替换为 `url:` + `checksum:`，幂等。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

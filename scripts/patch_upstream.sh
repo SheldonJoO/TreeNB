@@ -116,6 +116,30 @@ else:
 PY
 fi
 
+# A6. minimuxer/DeviceGateway 的 IDevice.xcframework 指向构建机本地目录（不进 git），
+#     CI 上 SPM 会报 "does not contain a binary artifact"。切到上游注释里保留的
+#     官方 release URL + checksum（同一份二进制，仅来源不同）。
+DG_PKG="$SSS/Dependencies/minimuxer/DeviceGateway/Package.swift"
+if [ -f "$DG_PKG" ]; then
+  python3 - "$DG_PKG" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+needle = 'path: "../../../local/idevice/swift/IDevice.xcframework"'
+replacement = ('url: "https://github.com/SideStore/idevice/releases/download/'
+               'v0.1.68-ss-3e55c84/idevice-xcframework-v0.1.68-ss-3e55c84.zip#DeviceGateway",\n'
+               '        checksum: "445702d53942597deb4cdec2c4122d16a3f4ac124ce26cd75b68dab3dad92416"')
+if needle in s:
+    s = s.replace(needle, replacement, 1)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  DeviceGateway/Package.swift: IDevice 已改从 release URL 获取')
+else:
+    print('  DeviceGateway/Package.swift: 无需改（已切换或上游已变）')
+PY
+else
+  warn "DeviceGateway/Package.swift 缺失，跳过 IDevice 修复"
+fi
+
 # ---------------------------------------------------------------------------
 # B. openSSS 侧：加容器 Tab + 深链路由 + Widget 并入
 # ---------------------------------------------------------------------------
