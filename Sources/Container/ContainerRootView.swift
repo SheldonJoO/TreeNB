@@ -169,14 +169,12 @@ private struct IPAImporter: UIViewControllerRepresentable {
     let onPick: (URL) -> Void
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        // 用 importedAs 查我们在 Info.plist 的 UTImportedTypeDeclarations 中声明的
-        // com.apple.itunes.ipa；exportedAs 只查 UTExportedTypeDeclarations，查不到。
-        // 追加 archive / data 兜底，保证即使某个 UTI 未注册也能选到 .ipa 文件。
-        var types: [UTType] = []
-        if let ipa = UTType(importedAs: "com.apple.itunes.ipa") { types.append(ipa) }
-        if let ipa2 = UTType(filenameExtension: "ipa") { types.append(ipa2) }
-        types.append(.archive)
-        types.append(.data)
+        // 文件类型过滤：IPA 本质是 zip（com.apple.itunes.ipa conformsTo public.data）。
+        // 用 .archive/.data/.item 三个静态 UTI 兜底，能覆盖 .ipa 且不涉及 Optional 初始化
+        // （UTType(importedAs:)/UTType(filenameExtension:) 在不同 SDK 返回类型不一致，
+        // 在 if let 里会因非 Optional 报 "initializer for conditional binding" 编译错误）。
+        // plist 里已声明 com.apple.itunes.ipa，系统会把 .ipa 正确归到这些类别。
+        let types: [UTType] = [.archive, .data, .item]
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
