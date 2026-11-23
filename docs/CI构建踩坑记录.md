@@ -103,6 +103,10 @@ A4 补丁只在 `LCOpenSideStore` 分支的 `if` 前插了 `#if 0`，忘了补 `
 1. `project.yml` 的 AltWidgetExtension 加 `WIDGET_EXTENSION`（Swift + GCC 两组），sources 补这两个文件。
 2. **关键陷阱**：Spike 构建原本用 xcodebuild 命令行全局覆盖 `SWIFT_ACTIVE_COMPILATION_CONDITIONS`，它会冲掉 target 级的 `WIDGET_EXTENSION`（`$(inherited)` 只继承 project 级，不含 target 级），导致非 Spike 能过、Spike 过不了。改为 `scripts/inject_spike.py` 在生成工程前纯文本注入 `TNB_SPIKE` 到 TreeNB target（幂等），CI 去掉命令行宏覆盖。经验：xcodebuild 命令行 build setting 是全局覆盖且优先级最高，多 target 不同宏需求时绝不能用它注入条件编译，要写进工程描述按 target 区分。
 
+### 18. `LiveContainerSwiftUI` 393 条 `cannot find 'LCUtils' / 'LCSharedUtils' / 'LCAppInfo' in scope`
+Widget 修好后错误转到 SwiftUI framework。根因：原工程 SwiftUI target 设了 `SWIFT_OBJC_BRIDGING_HEADER = LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h`，Swift 靠它看到一众 ObjC 类（`LCUtils`/`LCAppInfo`/`AppSceneViewController`/`PiPManager`/`LCSharedUtils` 及 `FoundationPrivate.h` 里的 `SecTaskCreateFromSelf` 等私有 API）。xcodegen 工程漏配 bridging header，Swift 侧一个类都看不到，级联出 393 条错误。
+修复：`project.yml` 的 LiveContainerSwiftUI 加 `SWIFT_OBJC_BRIDGING_HEADER`（指向原工程 header）+ `HEADER_SEARCH_PATHS`（SwiftUI 各含 .h 子目录 + LiveContainer 根/Tweaks/LivePlugInSupport）。bridging header 里 `#include "LCAppInfo.h"` 等是相对路径，靠搜索路径解析；`LCUtils.h` 又递归 import `LCMachOUtils.h`/`utils.h`（提供 `LCParseMachO`/`sideStoreExist`/`lcSharedDefaults` category），链条式全部可见。经验：Xcode 工程里 ObjC + Swift 混编 target 必须配 bridging header，xcodegen 不会自动生成；FileSystemSynchronized 项目的隐藏 include 关系要顺着 header 递归查。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

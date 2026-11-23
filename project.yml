@@ -244,6 +244,20 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.LiveContainerSwiftUI
         IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         SWIFT_VERSION: '5.10'
+        # 原工程 SwiftUI target 靠 bridging header 让 Swift 看到 ObjC 类
+        # （LCUtils/LCAppInfo/AppSceneViewController/PiPManager/LCSharedUtils 等）。
+        # 漏配会导致大量 cannot find 'LCUtils' in scope。
+        SWIFT_OBJC_BRIDGING_HEADER: '$(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h'
+        # bridging header 与 .m 用相对路径 include 头文件；原工程靠 FileSystemSynchronized
+        # 把整棵树纳入搜索路径，xcodegen 需显式列出 SwiftUI 各子目录 + LiveContainer 根。
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI/Models
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI/MultitaskSupport
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI/Utilities
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainer
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainer/Tweaks
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainer/LivePlugInSupport
         GCC_PREPROCESSOR_DEFINITIONS:
           - '$(inherited)'
           - 'TREENB=1'
