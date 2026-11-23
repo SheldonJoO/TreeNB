@@ -18,6 +18,16 @@ APP=$(find build/Payload -maxdepth 1 -name "*.app" -type d | head -1)
 [ -n "$APP" ] || { echo "找不到 .app" >&2; exit 1; }
 echo "  app=$APP"
 
+echo "==> [1.5/4] 校验 Info.plist 关键键（防 xcodegen properties 覆盖回归）"
+BGMODES=$(/usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" 2>/dev/null || true)
+if ! echo "$BGMODES" | grep -q "location"; then
+  echo "致命错误: UIBackgroundModes 缺少 location！上游启动代码调用 setAllowsBackgroundLocationUpdates:，缺此声明会导致 CoreLocation 启动断言秒退。" >&2
+  echo "当前 UIBackgroundModes: $BGMODES" >&2
+  echo "请在 project.yml 的 info.properties.UIBackgroundModes 补回 location 后重新构建。" >&2
+  exit 1
+fi
+echo "  UIBackgroundModes 含 location，校验通过"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 

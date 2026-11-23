@@ -149,6 +149,13 @@ targets:
         UIBackgroundModes:
           - fetch
           - processing
+          - audio
+          - bluetooth-central
+          - external-accessory
+          - location
+          - nearby-interaction
+          - remote-notification
+          - voip
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         CFBundleDocumentTypes:
