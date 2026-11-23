@@ -159,16 +159,13 @@ targets:
         get-task-allow: false
     dependencies:
       # LC 引擎（多开核心）内嵌为 framework
-      # 注意：xcodegen 的 `framework:` 不会自动建立 target 依赖，必须显式写 target，
-      # 否则 xcodebuild 不会先编 framework，Swift 侧报 no such module。
+      # 只用 `target:` 依赖，一次搞定 build order + link + embed。
+      # 不要再叠加 `framework: ... embed: true`，否则会生成两个 Embed Frameworks
+      # 阶段，触发 "Multiple commands produce .../LiveContainer*.framework"。
       - target: LiveContainerShared
+        embed: true
       - target: LiveContainerSwiftUI
-      - framework: LiveContainerShared.framework
         embed: true
-        link: true
-      - framework: LiveContainerSwiftUI.framework
-        embed: true
-        link: true
       # openSSS 原有的 SPM 依赖（主壳签名/续签/应用源全靠这些）
       - package: SideSign
         product: SideSign
@@ -238,8 +235,8 @@ targets:
           - '$(inherited)'
           - 'TREENB=1'
     dependencies:
+      # 已 rebuilt 的 framework 只 link，不 embed（Embedding 由主 App 统一负责）
       - target: LiveContainerShared
-      - framework: LiveContainerShared.framework
         embed: false
       - sdk: SwiftUI.framework
 

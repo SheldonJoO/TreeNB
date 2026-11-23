@@ -73,6 +73,9 @@ xcodegen 的 `framework: LiveContainerShared.framework` 只写 link/embed，**�
 ### 9. `Multiple commands produce .../TreeNB.framework`
 `settings.base` 里写了全局 `PRODUCT_NAME: TreeNB`，被所有 target 继承，导致 `LiveContainerShared` / `LiveContainerSwiftUI` 两个 framework 也产出 `TreeNB.framework`，与主 App 产物同名冲突。修复：从全局移除 `PRODUCT_NAME`，在每个 target 的 `settings.base` 分别声明。顺手给 Widget 补上独立 `PRODUCT_BUNDLE_IDENTIFIER`，避免被全局 xcconfig 的 `com.openssai.app` 覆盖。
 
+### 10. `Multiple commands produce .../LiveContainerShared.framework/LiveContainerShared`
+修第 8 条时同时保留了旧的 `- framework: LiveContainerShared.framework embed: true` 和新的 `- target: LiveContainerShared`，xcodegen 生成了两个 Embed Frameworks 阶段，同一 framework 被拷贝两次。**正确写法：只用 `- target: X embed: true`**，它一次生成 build order + link + embed；不要再叠加 `framework:` 声明。framework 之间的依赖（SwiftUI → Shared）用 `- target: Shared embed: false`，只 link，embed 统一交给主 App。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
