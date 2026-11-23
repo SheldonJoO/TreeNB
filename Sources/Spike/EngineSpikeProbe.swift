@@ -84,10 +84,17 @@ public enum EngineSpikeProbe {
             allOK = allOK && ok
             details.append("\(n)=\(ok ? "✅" : "❌")")
         }
-        var err: NSError?
-        let bootOK = LCEngineEntry.shared().bootstrapWithError(&err)
+        // ObjC 的尾参 NSError** 被 Swift 导入成 throws，不是显式 error: 参数。
+        var bootError: NSError?
+        var bootOK = false
+        do {
+            try LCEngineEntry.shared().bootstrap()
+            bootOK = true
+        } catch {
+            bootError = error as NSError
+        }
         allOK = allOK && bootOK
-        details.append("bootstrap=\(bootOK ? "✅" : "❌ \(err?.localizedDescription ?? "")")")
+        details.append("bootstrap=\(bootOK ? "✅" : "❌ \(bootError?.localizedDescription ?? "")")")
         let detail = details.joined(separator: ", ")
         ProbeReport.shared.add(question: "Q2 引擎能内嵌", detail: detail, passed: allOK)
         log("Q2 \(detail)")
@@ -96,8 +103,14 @@ public enum EngineSpikeProbe {
     /// Q3：guest 往返（需先安装一个最小 guest）
     public static func probeGuestRoundTrip(bundle: String) {
         var err: NSError?
-        let ok = LCEngineEntry.shared().launchGuestApp(
-            bundle, containerFolder: nil, launchURL: nil, classicMode: 0, error: &err)
+        var ok = false
+        do {
+            try LCEngineEntry.shared().launchGuestApp(
+                bundle, containerFolder: nil, launchURL: nil, classicMode: 0)
+            ok = true
+        } catch {
+            err = error as NSError
+        }
         if ok {
             ProbeReport.shared.add(question: "Q3 guest 启动", detail: "已交给 guest，返回后确认闭环", passed: true)
             // guest 退出通知到达后追加"返回"结果
@@ -158,13 +171,13 @@ public struct SpikeResultView: View {
 
                 Section("Q3 guest 往返（需先装一个最小 guest）") {
                     TextField("guest .app 目录名，如 Demo.app", text: $guestBundle)
-                    Button("启动 guest 测往返") {
+                    SwiftUI.Button("启动 guest 测往返") {
                         if !guestBundle.isEmpty { EngineSpikeProbe.probeGuestRoundTrip(bundle: guestBundle) }
                     }
                 }
 
                 Section {
-                    Button("复制报告文本") {
+                    SwiftUI.Button("复制报告文本") {
                         UIPasteboard.general.string = report.text
                         showCopy = true
                     }
@@ -174,11 +187,11 @@ public struct SpikeResultView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("运行 Q1+Q2") { EngineSpikeProbe.runSafeProbes() }
+                    SwiftUI.Button("运行 Q1+Q2") { EngineSpikeProbe.runSafeProbes() }
                 }
             }
             .alert("报告已复制到剪贴板", isPresented: $showCopy) {
-                Button("好", role: .cancel) {}
+                SwiftUI.Button("好", role: .cancel) {}
             }
             .onAppear { if report.results.isEmpty { EngineSpikeProbe.runSafeProbes() } }
         }

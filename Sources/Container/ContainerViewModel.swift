@@ -18,8 +18,15 @@ final class ContainerViewModel: ObservableObject {
 
     /// 引擎初始化（幂等）
     func bootstrap() async {
+        // ObjC 尾参 NSError** → Swift throws；不要再传 error: 实参。
         var err: NSError?
-        let ok = engine.bootstrapWithError(&err)
+        var ok = false
+        do {
+            try engine.bootstrap()
+            ok = true
+        } catch {
+            err = error as NSError
+        }
         isBootstrapping = false
         if !ok { lastError = err?.localizedDescription ?? "引擎初始化失败" }
         await refresh()
@@ -59,11 +66,16 @@ final class ContainerViewModel: ObservableObject {
     /// 启动 guest（进程主线权交给 guest；返回时宿主已恢复）
     func launch(bundle: String) async {
         var err: NSError?
-        let ok = engine.launchGuestApp(bundle,
-                                       containerFolder: nil,
-                                       launchURL: nil,
-                                       classicMode: 0,
-                                       error: &err)
+        var ok = false
+        do {
+            try engine.launchGuestApp(bundle,
+                                      containerFolder: nil,
+                                      launchURL: nil,
+                                      classicMode: 0)
+            ok = true
+        } catch {
+            err = error as NSError
+        }
         if !ok {
             lastError = err?.localizedDescription ?? "启动失败"
         } else {

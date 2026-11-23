@@ -36,7 +36,7 @@ public final class TNBDeepLinkRouter {
         }
 
         let host = url.host?.lowercased() ?? ""
-        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? [:]
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let query = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value) })
 
         switch host {

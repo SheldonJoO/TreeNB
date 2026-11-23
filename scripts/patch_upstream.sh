@@ -287,6 +287,8 @@ log "C. 挂载 TreeNB 适配源码到上游树"
 mkdir -p "$SSS/AltStore/TreeNB/Container" "$SSS/AltStore/TreeNB/Routing" "$SSS/AltWidget/TreeNB"
 cp "$ROOT/Sources/Container/"*.swift "$SSS/AltStore/TreeNB/Container/" 2>/dev/null || true
 cp "$ROOT/Sources/Routing/"*.swift   "$SSS/AltStore/TreeNB/Routing/"  2>/dev/null || true
+# SideStore.debugLog 兼容层：上游源码把它当 module 限定调用，单包后 module 不存在
+cp "$ROOT/Sources/Compat/"*.swift    "$SSS/AltStore/TreeNB/"          2>/dev/null || true
 cp "$ROOT/Sources/Widget/"*.swift    "$SSS/AltWidget/TreeNB/"         2>/dev/null || true
 # LC 引擎桥接层挂进 LiveContainer 源码树（framework target 从这里编译）
 mkdir -p "$LC/LiveContainer/TreeNBBridge/include"

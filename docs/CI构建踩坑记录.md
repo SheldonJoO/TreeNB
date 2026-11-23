@@ -135,6 +135,18 @@ SwiftUI 语法修好后只剩这一条真实错误。`LCUtils.m` import 了 Swif
 modulemap 修好后 Archive 走到主 App 源码编译才暴露：`project.yml` 里 SemanticVersion 用 `from: 0.4.0`，SPM 自动解析到更新的版本，其 Package.swift 声明最低 iOS 16；而 TreeNB 主 App 是 iOS 15。
 修复：改成 `exactVersion: 0.4.0`（该版本 Package.swift 未声明 platforms，兼容 iOS 15）。经验：`from:` 不是锁定，CI 每次可能解析到新版本并改变最低系统要求；主 App 部署目标较低时，所有 SPM 依赖都应核对并 pin 到兼容版本。
 
+### 26. `cannot find 'SideStore' in scope`（CacheAppOperation 等）
+上游 openSSS 源码里有 `SideStore.debugLog(...)`。原工程里 `SideStore` 是 target/module 名，这是对模块内全局 `debugLog` 的限定调用；TreeNB 把 SideStore 源码直接编进主 App，module 不存在了。
+修复：新增 `Sources/Compat/SideStoreCompat.swift`，定义 `public enum SideStore { static func debugLog(...) }` 转发到全局 `debugLog`，由 patch_upstream.sh 挂进主 App 源码树。注意在文件作用域先捕获全局函数，避免 enum 内同名方法递归。
+
+### 27. `value of type 'Button' has no member 'buttonStyle'` / `no exact matches in call to initializer`
+主 App 同时可见 SwiftUI.Button 与 UIKit.UIButton，`Button` 被解析成 UIButton，于是 `Button("导入 IPA") {}`、`.buttonStyle(.plain)` 全错，还连带把 `var body: some View` 拖成 "unable to type-check in reasonable time"。
+修复：容器与 Spike 面板里所有按钮写成 `SwiftUI.Button(...)` 显式限定。经验：Swift 同时 import SwiftUI/UIKit 且存在同名类型时，用模块前缀最省事，还能避免类型检查器爆炸。
+
+### 28. `LCEngineEntry has no member 'bootstrapWithError'` / `extra argument 'error' in call`
+ObjC 方法的尾参 `NSError **` 被 Swift 导入为 `throws`，参数标签会消失。`bootstrapWithError:` → `bootstrap() throws`；`launchGuestApp:...error:` → `launchGuestApp(_:containerFolder:launchURL:classicMode:) throws`。
+修复：ContainerViewModel / EngineSpikeProbe 改用 `do { try ... } catch { err = error as NSError }`。另修 `TNBDeepLinkRouter` 的 `queryItems ?? [:]`（数组不该用字典空字面量）与图标名多层字典下标转换。经验：Swift 调 ObjC NSError** API 一律按 throws 写，不要手传 `&error`。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

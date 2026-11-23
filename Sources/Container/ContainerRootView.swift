@@ -43,7 +43,7 @@ struct ContainerRootView: View {
                     }
                     .accessibilityLabel("Spike 自检")
                     #endif
-                    Button {
+                    SwiftUI.Button {
                         showImporter = true
                     } label: {
                         Image(systemName: "plus.circle.fill")
@@ -57,7 +57,7 @@ struct ContainerRootView: View {
                 }
             }
             .alert("容器错误", isPresented: $showError) {
-                Button("好", role: .cancel) {}
+                SwiftUI.Button("好", role: .cancel) {}
             } message: {
                 Text(errorMessage)
             }
@@ -83,7 +83,7 @@ struct ContainerRootView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
-            Button("导入 IPA") { showImporter = true }
+            SwiftUI.Button("导入 IPA") { showImporter = true }
                 .buttonStyle(.borderedProminent)
         }
     }
@@ -115,7 +115,7 @@ private struct GuestRow: View {
     @State private var icon: UIImage?
 
     var body: some View {
-        Button(action: launch) {
+        SwiftUI.Button(action: launch) {
             HStack(spacing: 12) {
                 Group {
                     if let icon { Image(uiImage: icon).resizable() }
@@ -185,9 +185,21 @@ private enum IconLoader {
         for appURL in candidates {
             let plist = appURL.appendingPathComponent("Info.plist")
             guard let info = NSDictionary(contentsOf: plist) as? [String: Any] else { continue }
-            let iconName = info["CFBundleIconFile"] as? String
-                ?? info["CFBundleIcons"]?["CFBundlePrimaryIcon"]?["CFBundleIconFiles"] as? String
-                ?? "AppIcon"
+            let iconName: String
+            if let direct = info["CFBundleIconFile"] as? String {
+                iconName = direct
+            } else if let icons = info["CFBundleIcons"] as? [String: Any],
+                      let primary = icons["CFBundlePrimaryIcon"] as? [String: Any] {
+                if let files = primary["CFBundleIconFiles"] as? [String], let first = files.first {
+                    iconName = first
+                } else if let file = primary["CFBundleIconFiles"] as? String {
+                    iconName = file
+                } else {
+                    iconName = "AppIcon"
+                }
+            } else {
+                iconName = "AppIcon"
+            }
             let iconPath = appURL.appendingPathComponent(iconName).path
             if let img = UIImage(contentsOfFile: iconPath) { return img }
         }
