@@ -39,6 +39,7 @@ final class ContainerViewModel: ObservableObject {
 
     /// 导入并安装 IPA
     func install(ipaURL: URL) async {
+        lastError = nil
         installProgress = "准备安装…"
         // security-scoped resource（UIDocumentPicker asCopy 通常已拷贝，但保险起见）
         let accessed = ipaURL.startAccessingSecurityScopedResource()

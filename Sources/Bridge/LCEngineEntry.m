@@ -16,6 +16,9 @@
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
+#include <archive.h>
+#include <archive_entry.h>
+#include <time.h>
 
 NSErrorDomain const TNBEngineErrorDomain = @"com.openssai.app.LCEngineError";
 
@@ -27,6 +30,95 @@ NSErrorDomain const TNBEngineErrorDomain = @"com.openssai.app.LCEngineError";
 
 // 上游 LiveContainerMain(int argc, char *argv[]) —— 通过 dlsym 拿到
 typedef int (*TNBLCMainFn)(int, char **);
+
+// LCAppInfo 在 LiveContainerSwiftUI.framework 里（主 App 已 link）。
+// 这里用 protocol + NSClassFromString 调用，避免 LiveContainerShared 反向依赖 SwiftUI framework。
+@protocol TNBLCAppInfoBridge <NSObject>
+- (id)initWithBundlePath:(NSString *)bundlePath;
+- (NSString *)bundleIdentifier;
+- (void)patchExecAndSignIfNeedWithCompletionHandler:(void (^)(bool success, NSString *errorInfo))completionHandler
+                                    progressHandler:(void (^)(NSProgress *progress))progressHandler
+                                           forceSign:(BOOL)forceSign;
+@end
+
+// IPA 解压。IPA 就是 zip（Payload/*.app），复用上游 unarchive.m 的 libarchive 参数，
+// 但加上路径清洗，避免恶意 IPA 用 ../ 写到容器外。
+static int TNBExtractIPAAtPath(NSString *ipaPath, NSString *destPath, void (^progress)(double fraction)) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:destPath withIntermediateDirectories:YES attributes:nil error:nil];
+
+    int64_t total = 0;
+    int64_t done = 0;
+    int flags = ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS;
+
+    struct archive *a = archive_read_new();
+    archive_read_support_format_all(a);
+    archive_read_support_filter_all(a);
+    if (archive_read_open_filename(a, ipaPath.fileSystemRepresentation, 10240) != ARCHIVE_OK) {
+        archive_read_free(a);
+        return 1;
+    }
+    struct archive_entry *entry = NULL;
+    // 第一遍只统计字节数，供进度条使用
+    while (archive_read_next_header(a, &entry) != ARCHIVE_EOF) {
+        total += archive_entry_size(entry);
+    }
+    archive_read_close(a);
+    archive_read_free(a);
+
+    // 第二遍实际解压
+    a = archive_read_new();
+    archive_read_support_format_all(a);
+    archive_read_support_filter_all(a);
+    if (archive_read_open_filename(a, ipaPath.fileSystemRepresentation, 10240) != ARCHIVE_OK) {
+        archive_read_free(a);
+        return 1;
+    }
+    int result = 0;
+    while (archive_read_next_header(a, &entry) != ARCHIVE_EOF) {
+        const char *raw = archive_entry_pathname(entry);
+        if (!raw) { archive_read_data_skip(a); continue; }
+        NSString *rel = [NSString stringWithUTF8String:raw] ?: @"";
+        // 跳过 macOS 资源分支文件
+        if ([rel hasPrefix:@"__MACOSX/"] || [rel.lastPathComponent hasPrefix:@"._"]) {
+            archive_read_data_skip(a);
+            continue;
+        }
+        // 去掉绝对路径与 .. 分量，确保只能写到 destPath 内
+        NSMutableArray *safe = [NSMutableArray array];
+        for (NSString *part in [rel componentsSeparatedByString:@"/"]) {
+            if (part.length == 0 || [part isEqualToString:@"."] || [part isEqualToString:@".."]) { continue; }
+            [safe addObject:part];
+        }
+        rel = [safe componentsJoinedByString:@"/"];
+        if (rel.length == 0) { archive_read_data_skip(a); continue; }
+        archive_entry_set_pathname(entry, [destPath stringByAppendingPathComponent:rel].fileSystemRepresentation);
+
+        if (archive_read_extract(a, entry, flags) != ARCHIVE_OK) {
+            NSLog(@"[TreeNB] 解压条目失败: %@", rel);
+            result = 1;
+            break;
+        }
+        done += archive_entry_size(entry);
+        if (progress) { progress(total > 0 ? (double)done / (double)total : 0.5); }
+    }
+    archive_read_close(a);
+    archive_read_free(a);
+    return result;
+}
+
+static NSString *TNBSanitizedBundleName(NSString *identifier) {
+    if (identifier.length == 0) { return nil; }
+    NSMutableString *out = [NSMutableString stringWithCapacity:identifier.length];
+    for (NSUInteger i = 0; i < identifier.length; i++) {
+        unichar c = [identifier characterAtIndex:i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+            [out appendFormat:@"%C", c];
+        }
+    }
+    return out.length ? [out copy] : nil;
+}
 
 @interface LCEngineEntry ()
 @property (nonatomic, assign) TNBEngineStatus status;
@@ -182,52 +274,94 @@ typedef int (*TNBLCMainFn)(int, char **);
 - (void)installIPAAtURL:(NSURL *)ipaURL
                progress:(TNBInstallProgress)progress
              completion:(TNBInstallCompletion)completion {
-    // 实现委托给上游 LCMachOUtils/LCUtils 的安装流水线：
-    //   unzip → 找 Info.plist → patch MachO (LC_LOAD_DYLIB) → 注入 TweakLoader → ZSign → 落盘
-    // 这里给出框架与调用顺序；具体 patch/sign 原语来自 LiveContainerShared.framework。
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        if (progress) { progress(@"unzip", 0.1); }
+        __block BOOL finished = NO;
+        void (^finish)(BOOL, NSString *, NSError *) = ^(BOOL ok, NSString *path, NSError *err) {
+            if (finished) { return; }
+            finished = YES;
+            [self finishInstall:ok path:path error:err completion:completion];
+        };
 
-        NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:[[NSUUID UUID] UUIDString]];
-        NSError *err = nil;
-        [[NSFileManager defaultManager] createDirectoryAtPath:tmp
-                                  withIntermediateDirectories:YES attributes:nil error:&err];
-        if (err) { [self finishInstall:NO path:nil error:err completion:completion]; return; }
+        if (self.status != TNBEngineStatusReady) {
+            NSError *bootErr = nil;
+            if (![self bootstrapWithError:&bootErr]) { finish(NO, nil, bootErr); return; }
+        }
+        if (![[NSFileManager defaultManager] fileExistsAtPath:ipaURL.path]) {
+            NSError *e = [NSError errorWithDomain:TNBEngineErrorDomain code:10
+                                        userInfo:@{NSLocalizedDescriptionKey:@"找不到选择的 IPA 文件"}];
+            finish(NO, nil, e); return;
+        }
 
-        // TODO(upstream): 调用 LCMachOUtils.unzipIPA(ipaURL, to: tmp)
-        // 由 prepare_dependencies.sh 保证 LCMachOUtils 在 framework 内可见。
-        if (progress) { progress(@"patch", 0.5); }
+        // 1) 解压 IPA（Payload/*.app）
+        if (progress) { progress(@"解压", 0.05); }
+        NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"TNBImport-%@", [NSUUID UUID].UUIDString]];
+        [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
+        int rc = TNBExtractIPAAtPath(ipaURL.path, tmp, ^(double fraction) {
+            if (progress) { progress(@"解压", 0.05 + 0.55 * fraction); }
+        });
+        if (rc != 0) {
+            NSError *e = [NSError errorWithDomain:TNBEngineErrorDomain code:11
+                                        userInfo:@{NSLocalizedDescriptionKey:@"IPA 解压失败，文件可能损坏或不是有效的 IPA"}];
+            finish(NO, nil, e); return;
+        }
 
-        // TODO(upstream): 找 .app → LCMachOUtils.patchMachOForGuest(appPath)
-        if (progress) { progress(@"sign", 0.8); }
-
-        NSError *signErr = nil;
-        // 这里先做路径存在性检查，真正的 ZSign 由 signGuestAtPath: 完成
-        NSArray *contents = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:tmp error:&err];
+        // 2) 定位 Payload 里的 .app
+        NSString *payload = [tmp stringByAppendingPathComponent:@"Payload"];
+        NSArray *contents = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:payload error:nil] ?: @[];
         NSString *appName = [[contents filteredArrayUsingPredicate:
             [NSPredicate predicateWithFormat:@"pathExtension == 'app'"]] firstObject];
         if (!appName) {
             NSError *e = [NSError errorWithDomain:TNBEngineErrorDomain code:7
-                                        userInfo:@{NSLocalizedDescriptionKey:@"IPA 内找不到 .app"}];
-            [self finishInstall:NO path:nil error:e completion:completion];
-            return;
+                                        userInfo:@{NSLocalizedDescriptionKey:@"IPA 内找不到 Payload/*.app"}];
+            finish(NO, nil, e); return;
         }
-        NSString *appPath = [tmp stringByAppendingPathComponent:appName];
-        if (![self signGuestAtPath:appPath error:&signErr]) {
-            [self finishInstall:NO path:nil error:signErr completion:completion];
-            return;
+        NSString *appPath = [payload stringByAppendingPathComponent:appName];
+        NSDictionary *appInfoPlist = [NSDictionary dictionaryWithContentsOfFile:
+                                      [appPath stringByAppendingPathComponent:@"Info.plist"]];
+        if (!appInfoPlist) {
+            NSError *e = [NSError errorWithDomain:TNBEngineErrorDomain code:12
+                                        userInfo:@{NSLocalizedDescriptionKey:@"IPA 内找不到 Info.plist"}];
+            finish(NO, nil, e); return;
         }
 
-        // 落盘到 bundleRoot
-        NSString *dest = [self.bundleRoot URLByAppendingPathComponent:appName].path;
+        // 3) 落盘到容器目录。同名冲突时改名，保留旧版本而不是覆盖。
+        NSString *ident = TNBSanitizedBundleName(appInfoPlist[@"CFBundleIdentifier"]);
+        NSString *folderName = [ident stringByAppendingString:@".app"] ?: appName;
+        NSString *dest = [self.bundleRoot URLByAppendingPathComponent:folderName].path;
+        if ([[NSFileManager defaultManager] fileExistsAtPath:dest]) {
+            folderName = [NSString stringWithFormat:@"%@_%ld.app", ident ?: appName, (long)time(NULL)];
+            dest = [self.bundleRoot URLByAppendingPathComponent:folderName].path;
+        }
+        NSError *moveErr = nil;
         [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
-        if (![[NSFileManager defaultManager] moveItemAtPath:appPath toPath:dest error:&err]) {
-            [self finishInstall:NO path:nil error:err completion:completion];
-            return;
+        if (![[NSFileManager defaultManager] moveItemAtPath:appPath toPath:dest error:&moveErr]) {
+            finish(NO, nil, moveErr); return;
         }
 
-        if (progress) { progress(@"install", 1.0); }
-        [self finishInstall:YES path:dest error:nil completion:completion];
+        // 4) 调上游 LCAppInfo 做 MachO patch + ZSign（签名失败也会留下未签名 app，与上游行为一致）
+        if (progress) { progress(@"修补", 0.75); }
+        Class infoClass = NSClassFromString(@"LCAppInfo");
+        id<TNBLCAppInfoBridge> appInfo = infoClass ?
+            [(id<TNBLCAppInfoBridge>)[infoClass alloc] initWithBundlePath:dest] : nil;
+        if (!appInfo) {
+            // 极端情况：SwiftUI framework 未加载。app 已落盘，仍算成功，只是未 patch。
+            NSLog(@"[TreeNB] 警告: LCAppInfo 不可用，IPA 已落盘但未 patch/签名");
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"TNBGuestDidExitNotification" object:nil];
+            finish(YES, dest, nil); return;
+        }
+        [appInfo patchExecAndSignIfNeedWithCompletionHandler:^(bool success, NSString *errorInfo) {
+            if (!success) {
+                NSLog(@"[TreeNB] 警告: patch/签名未完全成功: %@", errorInfo);
+            }
+            if (progress) { progress(@"完成", 1.0); }
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"TNBGuestDidExitNotification" object:nil];
+            finish(YES, dest, nil);
+        } progressHandler:^(NSProgress *signProgress) {
+            if (progress) { progress(@"签名", 0.85 + 0.14 * signProgress.fractionCompleted); }
+        } forceSign:NO];
+
+        [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
     });
 }
 

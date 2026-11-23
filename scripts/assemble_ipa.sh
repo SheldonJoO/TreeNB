@@ -59,6 +59,23 @@ case "${DELEGATE}" in
     ;;
 esac
 
+echo "==> [1.6/4] 校验 IPA 导入链路不是桩实现"
+ENGINE_SRC="Sources/Bridge/LCEngineEntry.m"
+if grep -q 'TODO(upstream): 调用 LCMachOUtils.unzipIPA' "$ENGINE_SRC"; then
+  echo "致命错误: LCEngineEntry.m 的 installIPA 仍是 TODO 桩（只建临时目录不解压），导入 IPA 会静默失败。" >&2
+  exit 1
+fi
+if ! grep -q 'TNBExtractIPAAtPath' "$ENGINE_SRC"; then
+  echo "致命错误: LCEngineEntry.m 缺少真实解压实现 TNBExtractIPAAtPath。" >&2
+  exit 1
+fi
+LC_FW_BIN=$(find "$APP/Frameworks" -maxdepth 2 -type f -name LiveContainerShared 2>/dev/null | head -1 || true)
+if [ -n "$LC_FW_BIN" ] && ! otool -L "$LC_FW_BIN" | grep -q 'libarchive'; then
+  echo "致命错误: LiveContainerShared 未链接 libarchive，IPA 解压会链接失败。" >&2
+  exit 1
+fi
+echo "  IPA 导入链路校验通过（真实解压 + libarchive 已链接）"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 

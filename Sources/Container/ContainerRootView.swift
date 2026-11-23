@@ -17,8 +17,6 @@ import LiveContainerShared
 struct ContainerRootView: View {
     @StateObject private var model = ContainerViewModel()
     @State private var showImporter = false
-    @State private var showError = false
-    @State private var errorMessage = ""
 
     var body: some View {
         AdaptiveNavigation {
@@ -29,6 +27,16 @@ struct ContainerRootView: View {
                     emptyState
                 } else {
                     guestList
+                }
+            }
+            .overlay {
+                if let progress = model.installProgress {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                        Text(progress).font(.caption)
+                    }
+                    .padding(16)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
             .navigationTitle("容器")
@@ -53,13 +61,19 @@ struct ContainerRootView: View {
             }
             .sheet(isPresented: $showImporter) {
                 IPAImporter { url in
+                    showImporter = false
                     Task { await model.install(ipaURL: url) }
+                } onCancel: {
+                    showImporter = false
                 }
             }
-            .alert("容器错误", isPresented: $showError) {
+            .alert("容器错误", isPresented: Binding(
+                get: { model.lastError != nil },
+                set: { if !$0 { model.lastError = nil } }
+            )) {
                 SwiftUI.Button("好", role: .cancel) {}
             } message: {
-                Text(errorMessage)
+                Text(model.lastError ?? "")
             }
             .onReceive(NotificationCenter.default.publisher(
                 for: Notification.Name("TNBGuestDidExitNotification"))) { _ in
@@ -167,28 +181,56 @@ private struct AdaptiveNavigation<Content: View>: View {
 
 private struct IPAImporter: UIViewControllerRepresentable {
     let onPick: (URL) -> Void
+    let onCancel: () -> Void
 
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        // 文件类型过滤：IPA 本质是 zip（com.apple.itunes.ipa conformsTo public.data）。
-        // 用 .archive/.data/.item 三个静态 UTI 兜底，能覆盖 .ipa 且不涉及 Optional 初始化
-        // （UTType(importedAs:)/UTType(filenameExtension:) 在不同 SDK 返回类型不一致，
-        // 在 if let 里会因非 Optional 报 "initializer for conditional binding" 编译错误）。
-        // plist 里已声明 com.apple.itunes.ipa，系统会把 .ipa 正确归到这些类别。
-        let types: [UTType] = [.archive, .data, .item]
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
-        picker.delegate = context.coordinator
-        picker.allowsMultipleSelection = false
-        return picker
+    func makeUIViewController(context: Context) -> PickerHostViewController {
+        let host = PickerHostViewController()
+        host.coordinator = context.coordinator
+        return host
     }
-    func updateUIViewController(_ ui: UIDocumentPickerViewController, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    func updateUIViewController(_ ui: PickerHostViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick, onCancel: onCancel) }
+
+    /// 不能把 UIDocumentPickerViewController 直接当 sheet 的 root：
+    /// 部分 iOS 版本上它不会正确进入文件选择流程，表现为"点+没反应"。
+    /// 用一个空 VC 承载，在 viewDidAppear 里正常 present 文件选择器。
+    final class PickerHostViewController: UIViewController {
+        weak var coordinator: Coordinator?
+        private var presented = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            guard !presented, let coordinator else { return }
+            presented = true
+            // IPA 本质是 zip。用 .archive/.data/.item 静态 UTI 兜底，
+            // 既能选到 .ipa，也不依赖 UTType(importedAs:) 的 Optional 行为。
+            let types: [UTType] = [.archive, .data, .item]
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+            picker.delegate = coordinator
+            picker.allowsMultipleSelection = false
+            present(picker, animated: false)
+        }
+    }
 
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onPick: (URL) -> Void
-        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+        let onCancel: () -> Void
+
+        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
         func documentPicker(_ controller: UIDocumentPickerViewController,
                             didPickDocumentsAt urls: [URL]) {
-            if let url = urls.first { onPick(url) }
+            guard let url = urls.first else { return }
+            controller.dismiss(animated: false) { [weak self] in self?.onPick(url) }
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            controller.dismiss(animated: false) { [weak self] in self?.onCancel() }
         }
     }
 }

@@ -378,6 +378,8 @@ targets:
         MODULEMAP_FILE: upstream/TreeNewBee/LiveContainer/TreeNBBridge/include/module.modulemap
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainer/TreeNBBridge/include
+          # LCEngineEntry.m 的 IPA 解压用 libarchive；头文件来自上游 vendor 目录。
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI/Utilities
           # 原工程靠 Xcode16 FileSystemSynchronized 把整棵源码树的 .h 纳入搜索；
           # xcodegen 没有该机制，需手动列出所有含头文件的子目录：
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainer
@@ -393,6 +395,8 @@ targets:
     dependencies:
       - sdk: Foundation.framework
       - sdk: UIKit.framework
+      # LCEngineEntry.m 解压 IPA 需要 archive_read_* / archive_write_disk_*
+      - sdk: libarchive.tbd
 
   # ===== 3. LC SwiftUI 列表 framework（容器 Tab 的 UI）=====
   LiveContainerSwiftUI:
