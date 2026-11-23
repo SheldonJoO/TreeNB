@@ -195,6 +195,11 @@ targets:
         excludes:
           - 'main.c'                 # 入口剥离：不再由 dyld 首先命中
           - '**/*.h'                 # 头文件走 publicHeaders
+      # litehook 是 TreeNewBee 的 git submodule，prepare_dependencies.sh 单独拉取。
+      # dyld_bypass_validation.m 用到 litehook_hook_function，必须把实现编进来。
+      - path: upstream/TreeNewBee/litehook/src
+        excludes:
+          - '**/*.h'
       # patch_upstream.sh 把 LCEngineEntry.m + include/ 挂到 TreeNBBridge/ 下
       # 所以这里的递归 source 已含 framework 新入口，无需再列 Sources/
     publicHeaders:
@@ -209,6 +214,10 @@ targets:
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainer/TreeNBBridge/include
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainer
+          # litehook.h 在 submodule 的 src/ 下；litehook.c 还 include 了
+          # external/include/dyld_cache_format.h
+          - $(SRCROOT)/upstream/TreeNewBee/litehook/src
+          - $(SRCROOT)/upstream/TreeNewBee/litehook/external/include
         GCC_PREPROCESSOR_DEFINITIONS:
           - '$(inherited)'
           - 'LIVE_CONTAINER_FRAMEWORK=1'   # 让 LC 代码走 framework 分支，不抢 UIApplicationMain

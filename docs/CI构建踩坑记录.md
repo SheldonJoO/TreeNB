@@ -76,6 +76,12 @@ xcodegen 的 `framework: LiveContainerShared.framework` 只写 link/embed，**�
 ### 10. `Multiple commands produce .../LiveContainerShared.framework/LiveContainerShared`
 修第 8 条时同时保留了旧的 `- framework: LiveContainerShared.framework embed: true` 和新的 `- target: LiveContainerShared`，xcodegen 生成了两个 Embed Frameworks 阶段，同一 framework 被拷贝两次。**正确写法：只用 `- target: X embed: true`**，它一次生成 build order + link + embed；不要再叠加 `framework:` 声明。framework 之间的依赖（SwiftUI → Shared）用 `- target: Shared embed: false`，只 link，embed 统一交给主 App。
 
+### 11. `'litehook.h' file not found`（TreeNewBee 的 git submodule 没拉）
+第一次进入真实 Objective-C 源码编译，`dyld_bypass_validation.m` 报找不到 `litehook.h`。根因：TreeNewBee 的 `litehook` 与 `fishhook` 是 **git submodule**（tarball 拉取不带内容），原 Xcode 16 工程靠 FileSystemSynchronized 把 `litehook/` 整目录编进 `LiveContainerShared`。修复：
+- `prepare_dependencies.sh` 新增加 `fetch_submodule()`，用 codeload tarball 到固定 commit（`litehook` = `a7e9f599`）补拉到 `upstream/TreeNewBee/litehook`；
+- `project.yml` 的 `LiveContainerShared` 加 `upstream/TreeNewBee/litehook/src` 为 source（`litehook.c` 提供 `litehook_hook_function`），`HEADER_SEARCH_PATHS` 加 `litehook/src` 与 `litehook/external/include`（后者提供 `dyld_cache_format.h`）。
+教训：拉上游 tarball 时，凡 `.gitmodules` 里登记的目录都要单独补拉并固定 commit。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

@@ -42,6 +42,31 @@ mkdir -p upstream
 clone_or_update https://github.com/SheldonJoO/openSSS.git      "$ROOT/upstream/openSSS"
 clone_or_update https://github.com/SheldonJoO/TreeNewBee.git   "$ROOT/upstream/TreeNewBee"
 
+# 1b. TreeNewBee 的 git submodule —— tarball 拉取不带 submodule 内容，必须单独补。
+# dyld_bypass_validation.m 依赖 litehook.h + litehook.c（LiveContainerShared 编译）。
+# 固定到上游 .gitmodules 指向的 commit，用 codeload tarball（比 git submodule 抗网络抖动）。
+fetch_submodule() {
+  local repo="$1" sha="$2" dir="$3" name="$4"
+  if [ -f "$dir/src/litehook.h" ] || [ -f "$dir/src/fishhook.h" ]; then
+    ok "$name submodule 已存在，跳过"
+    return
+  fi
+  log "拉取 $name submodule ($sha) ..."
+  mkdir -p "$dir"
+  local url="https://codeload.github.com/${repo}/tar.gz/${sha}"
+  if curl -fL --retry 4 --retry-delay 2 --max-time 120 "$url" \
+       -o "/tmp/tnb_${name}.tar.gz" && \
+     tar xzf "/tmp/tnb_${name}.tar.gz" -C "$dir" --strip-components=1; then
+    rm -f "/tmp/tnb_${name}.tar.gz"
+    ok "$name submodule 就绪"
+  else
+    warn "$name submodule 拉取失败 —— LiveContainerShared 编译会缺头文件"
+    rm -f "/tmp/tnb_${name}.tar.gz"
+  fi
+}
+fetch_submodule "LiveContainer/litehook" a7e9f599d7f0b3d77008ad62bf10cb10dab6eca9 \
+  "$ROOT/upstream/TreeNewBee/litehook" "litehook"
+
 # 2. OpenSSL.xcframework（openSSS 签名栈）
 if [ ! -d "Dependencies/OpenSSL.xcframework" ]; then
   log "下载 OpenSSL.xcframework"
