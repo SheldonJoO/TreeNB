@@ -119,6 +119,10 @@ A3 补丁把 `LCUtilsExtensions.swift` 里的 `openSideStore()` 整个删掉，�
 SwiftUI 语法修好后只剩这一条真实错误。`LCUtils.m` import 了 Swift 生成的 Objective-C 头文件；Swift 编译阶段确实生成了它（`.../LiveContainerSwiftUI.build/Objects-normal/arm64/LiveContainerSwiftUI-Swift.h`），但 xcodegen 生成的 ObjC 编译命令只带 `DerivedSources` 搜索路径，没带 `Objects-normal/arm64`。
 修复：`project.yml` 的 LiveContainerSwiftUI 显式设置 `SWIFT_OBJC_INTERFACE_HEADER_NAME: LiveContainerSwiftUI-Swift.h`，并把 `$(TARGET_TEMP_DIR)/Objects-normal/arm64`（及 armv7 兜底）加进 `HEADER_SEARCH_PATHS`。经验：混编 framework 里 ObjC 调 Swift 类时，生成头文件位于 `$(TARGET_TEMP_DIR)/Objects-normal/<arch>/`，不是 `DerivedSources`；xcodegen 不会自动补这条搜索路径。
 
+### 22. `Undefined symbols _IOObjectRelease / _archive_read_new ...`（LiveContainerSwiftUI.framework 链接）
+头文件和语法全部通过后，编译进到链接阶段才暴露：`LCUtils.m` 的 `isTXMScriptRequired` 调用 IOKit，`unarchive.o` 调用 libarchive，而 xcodegen 工程只显式链了 SwiftUI。上游 `project.pbxproj` 的 Frameworks build phase 里其实有 `IOKit.framework` 和 `libarchive.tbd`，只是我们没有把这两条还原进 `project.yml`。
+修复：`LiveContainerSwiftUI.dependencies` 加 `- sdk: IOKit.framework` 与 `- sdk: libarchive.tbd`。经验：从 pbxproj 迁到 xcodegen 时，除了源码和头文件，Frameworks build phase 的每一项都要逐个对齐；编译期不报错的系统库缺失，通常要等到链接期才现形。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

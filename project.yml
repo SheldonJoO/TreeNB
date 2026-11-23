@@ -272,6 +272,11 @@ targets:
       - target: LiveContainerShared
         embed: false
       - sdk: SwiftUI.framework
+      # LCUtils.m 的 isTXMScriptRequired 用 IOKit；unarchive.o 用 libarchive。
+      # 上游 pbxproj 把这两个库挂在 LiveContainerSwiftUI target 上，xcodegen 需显式列出，
+      # 否则 framework 链接阶段报一堆 Undefined symbols（IOObjectRelease/archive_*）。
+      - sdk: IOKit.framework
+      - sdk: libarchive.tbd
 
   # ===== 4. Widget extension（openSSS AltWidget + TreeWidget 并入）=====
   AltWidgetExtension:
