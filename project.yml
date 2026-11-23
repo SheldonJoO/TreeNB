@@ -79,8 +79,8 @@ targets:
           - '**/*.entitlements'
       - path: upstream/openSSS/SideStore           # 签名/续签/Anisette 引擎 Swift module
       - path: upstream/openSSS/Shared
-      # --- 资源（AltStore 递归已含，此处显式声明便于 xcodegen 归类）---
-      - path: upstream/openSSS/AltStore/Assets.xcassets
+      # 资源 xcassets 由 AltStore/ 递归包含（真实路径 AltStore/Core/Resources/Colors.xcassets，
+      # 不存在 AltStore/Assets.xcassets —— xcodegen 对缺失 source 目录会直接报错）
     info:
       path: config/TreeNB-Info.plist
       properties:
