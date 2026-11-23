@@ -67,7 +67,7 @@ targets:
 
   # ===== 1. 主 App：openSSS 主壳 =====
   TreeNB:
-    type: application
+    type: com.apple.product-type.application
     platform: iOS
     sources:
       # --- openSSS 本体（主 executable，含 @UIApplicationMain）---
@@ -133,7 +133,7 @@ targets:
 
   # ===== 2. LC 引擎 framework（从 TreeNewBee 源码编译）=====
   LiveContainerShared:
-    type: framework
+    type: com.apple.product-type.framework
     platform: iOS
     sources:
       - path: upstream/TreeNewBee/LiveContainer
@@ -162,7 +162,7 @@ targets:
 
   # ===== 3. LC SwiftUI 列表 framework（容器 Tab 的 UI）=====
   LiveContainerSwiftUI:
-    type: framework
+    type: com.apple.product-type.framework
     platform: iOS
     sources:
       - path: upstream/TreeNewBee/LiveContainerSwiftUI
@@ -184,7 +184,7 @@ targets:
 
   # ===== 4. Widget extension（openSSS AltWidget + TreeWidget 并入）=====
   AltWidgetExtension:
-    type: appExtension
+    type: com.apple.product-type.app-extension
     platform: iOS
     sources:
       # patch_upstream.sh 把 TreeLaunchWidget.swift / TreeWidgetBridge.swift
