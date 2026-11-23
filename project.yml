@@ -227,7 +227,6 @@ schemes:
         AltWidgetExtension: [debug, release]
     run:
       target: TreeNB
-    archive:
-      targets:
-        - TreeNB
-        - AltWidgetExtension
+    # xcodegen 的 archive action 不接受 target 字段：只要出现 archive 键，
+    # 就对 build.targets 中标记为 release 的 target 生成 ArchiveAction。
+    archive: {}

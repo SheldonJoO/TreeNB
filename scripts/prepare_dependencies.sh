@@ -66,6 +66,53 @@ if command -v xcodegen >/dev/null 2>&1; then
   log "xcodegen generate"
   xcodegen generate
   ok "TreeNB.xcodeproj 已生成"
+
+  # 4b. 兜底：确保 scheme 含 ArchiveAction
+  # xcodegen 不同版本对空 archive:{} 的处理不一致，早期版本可能不生成
+  # ArchiveAction，导致 xcodebuild archive 直接报 "not configured for archive"。
+  # 这里校验并在缺失时注入一个指向主 App 的 ArchiveAction。
+  python3 - <<'PYEOF'
+import glob, os, re, sys
+schemes = glob.glob('TreeNB.xcodeproj/xcshareddata/xcschemes/*.xcscheme') + \
+          glob.glob('TreeNB.xcodeproj/xcuserdata/*/xcschemes/*.xcscheme')
+target = [p for p in schemes if os.path.basename(p) == 'TreeNB.xcscheme']
+if not target:
+    print('[warn] 未找到 TreeNB.xcscheme，跳过 ArchiveAction 校验')
+    sys.exit(0)
+p = target[0]
+s = open(p, encoding='utf-8').read()
+if '<ArchiveAction' in s:
+    print('[ ok ] TreeNB.xcscheme 已含 ArchiveAction')
+    sys.exit(0)
+# 找一个 application target 的 BuildableReference 块
+m = re.search(r'<BuildableReference[^>]*BuildableName="TreeNB\.app"[^>]*/>', s)
+if not m:
+    m = re.search(r'<BuildableReference\b[^>]*/>', s)
+if not m:
+    print('[warn] 无 BuildableReference，无法注入 ArchiveAction')
+    sys.exit(0)
+ref = m.group(0)
+# 提取 BlueprintIdentifier / BuildableName / BlueprintName
+def attr(a):
+    x = re.search(a + r'="([^"]*)"', ref)
+    return x.group(1) if x else ''
+entry = (f'      <BuildableEntry '
+         f'BuildableIdentifier="primary" '
+         f'BlueprintIdentifier="{attr("BlueprintIdentifier")}" '
+         f'BuildableName="{attr("BuildableName")}" '
+         f'BlueprintName="{attr("BlueprintName")}" '
+         f'ReferencedContainer="container:TreeNB.xcodeproj"/>')
+archive = ('   <ArchiveAction\n'
+           '      buildConfiguration="Release"\n'
+           '      revealArchiveInOrganizer="YES">\n'
+           '      <BuildActionEntries>\n'
+           f'{entry}\n'
+           '      </BuildActionEntries>\n'
+           '   </ArchiveAction>\n')
+s = s.replace('</Scheme>', archive + '</Scheme>')
+open(p, 'w', encoding='utf-8').write(s)
+print('[ ok ] 已为 TreeNB.xcscheme 注入 ArchiveAction（兜底）')
+PYEOF
 else
   warn "本机无 xcodegen —— CI runner 上会安装。本地可手动：brew install xcodegen && xcodegen generate"
 fi
