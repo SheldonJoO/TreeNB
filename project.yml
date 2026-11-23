@@ -146,6 +146,11 @@ targets:
             UIWindowSceneSessionRoleApplication:
               - UISceneConfigurationName: Default Configuration
                 UISceneDelegateClassName: SceneDelegate
+                # 黑屏修复：原版 openSSS 靠 storyboard 自动建 root VC，
+                # SceneDelegate.willConnectTo 不手动创建 window/root。
+                # 缺这两个键 → 系统建了 window 却不知道加载哪个 storyboard → 全黑屏。
+                UISceneStoryboardFile: Main
+                UILaunchStoryboardName: LaunchScreen
         UIBackgroundModes:
           - fetch
           - processing

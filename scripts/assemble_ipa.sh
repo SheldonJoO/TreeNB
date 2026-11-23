@@ -28,6 +28,15 @@ if ! echo "$BGMODES" | grep -q "location"; then
 fi
 echo "  UIBackgroundModes 含 location，校验通过"
 
+STORYBOARD=$(/usr/libexec/PlistBuddy -c "Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneStoryboardFile" "$APP/Info.plist" 2>/dev/null || true)
+if [ "$STORYBOARD" != "Main" ]; then
+  echo "致命错误: SceneManifest 缺少 UISceneStoryboardFile=Main！openSSS 的 SceneDelegate 不手动创建 window/root，靠 Main.storyboard 自动交接；缺此键启动后全黑屏。" >&2
+  echo "当前 UISceneStoryboardFile: '${STORYBOARD}'" >&2
+  echo "请在 project.yml 的 info.properties.UIApplicationSceneManifest 补回 UISceneStoryboardFile: Main 后重新构建。" >&2
+  exit 1
+fi
+echo "  SceneManifest 含 UISceneStoryboardFile=Main，校验通过"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 
