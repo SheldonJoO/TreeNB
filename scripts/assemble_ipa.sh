@@ -38,11 +38,14 @@ fi
 echo "  SceneManifest 含 UISceneStoryboardFile=Main，校验通过"
 
 DELEGATE=$(/usr/libexec/PlistBuddy -c "Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName" "$APP/Info.plist" 2>/dev/null || true)
-case "$DELEGATE" in
-  *".SceneDelegate") echo "  UISceneDelegateClassName=$DELEGATE，校验通过" ;;
+DELEGATE="${DELEGATE:-}"
+case "${DELEGATE}" in
+  *.SceneDelegate)
+    printf '  UISceneDelegateClassName=%s, check passed\n' "$DELEGATE"
+    ;;
   *)
-    echo "致命错误: UISceneDelegateClassName='$DELEGATE' 是裸名或缺失！Swift 模块化后真实类名是 <Module>.SceneDelegate（本包为 TreeNB.SceneDelegate）；裸名导致系统找不到 delegate 类，scene 加载失败、window 无 root、启动纯黑屏。" >&2
-    echo "请在 project.yml 用 UISceneDelegateClassName: \$(PRODUCT_MODULE_NAME).SceneDelegate 后重新构建。" >&2
+    printf 'FATAL: UISceneDelegateClassName=[%s] is empty or has no module prefix. Swift class real name is <Module>.SceneDelegate (this app: TreeNB.SceneDelegate). A bare name makes system fail to load scene delegate -> no root window -> black screen.\n' "$DELEGATE" >&2
+    printf 'Fix: in project.yml set UISceneDelegateClassName with PRODUCT_MODULE_NAME prefix, then rebuild.\n' >&2
     exit 1
     ;;
 esac
