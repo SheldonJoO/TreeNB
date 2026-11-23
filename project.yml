@@ -213,7 +213,11 @@ targets:
         MODULEMAP_FILE: upstream/TreeNewBee/LiveContainer/TreeNBBridge/include/module.modulemap
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainer/TreeNBBridge/include
+          # 原工程靠 Xcode16 FileSystemSynchronized 把整棵源码树的 .h 纳入搜索；
+          # xcodegen 没有该机制，需手动列出所有含头文件的子目录：
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainer
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainer/Tweaks
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainer/LivePlugInSupport
           # litehook.h 在 submodule 的 src/ 下；litehook.c 还 include 了
           # external/include/dyld_cache_format.h
           - $(SRCROOT)/upstream/TreeNewBee/litehook/src

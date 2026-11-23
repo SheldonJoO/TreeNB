@@ -82,6 +82,9 @@ xcodegen 的 `framework: LiveContainerShared.framework` 只写 link/embed，**�
 - `project.yml` 的 `LiveContainerShared` 加 `upstream/TreeNewBee/litehook/src` 为 source（`litehook.c` 提供 `litehook_hook_function`），`HEADER_SEARCH_PATHS` 加 `litehook/src` 与 `litehook/external/include`（后者提供 `dyld_cache_format.h`）。
 教训：拉上游 tarball 时，凡 `.gitmodules` 里登记的目录都要单独补拉并固定 commit。
 
+### 12. `'Tweaks.h' file not found`（xcodegen 无 FileSystemSynchronized，头文件搜索路径要手动列全）
+`LivePlugInSupport/NSExtension+GuestHooks.m` 报找不到 `Tweaks.h`（在 `LiveContainer/Tweaks/`）。同样是 Xcode16 FileSystemSynchronized 自动纳管整棵源码树头文件、xcodegen 不负责的差异。修复：`LiveContainerShared` 的 `HEADER_SEARCH_PATHS` 列全 `LiveContainer/` 下所有含 `.h` 的子目录（`LiveContainer` 根、`Tweaks`、`LivePlugInSupport`）。经验：从上游 tree API 提取所有 `.h` 的父目录，一次加全，避免逐文件补。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
