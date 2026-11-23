@@ -127,6 +127,10 @@ SwiftUI 语法修好后只剩这一条真实错误。`LCUtils.m` import 了 Swif
 链接库补齐后，Archive 走到主 App 编译才报：Swift 侧 `import LiveContainerShared` 时 framework 的 modulemap 找不到 umbrella header。根因：`LiveContainerShared` 的第一条 sources 用 `excludes: ['**/*.h']` 排除了整棵树头文件，而我把 `LCEngineEntry.h` 写成 target 顶层 `publicHeaders:`——xcodegen 并不认这个键，header 没进 framework/Headers；modulemap 被复制进 `Modules/`，Clang 按 framework module 规则去 `Headers/` 找 umbrella，自然找不到。
 修复：在 `sources` 里单独加 `path: .../TreeNBBridge/include` + `headerVisibility: public` + `buildPhase: headers`。经验：xcodegen 的 public headers 是 **source entry 的属性**（`headerVisibility`），不是 target 顶层 `publicHeaders`；排除 `**/*.h` 后必须把要公开的头文件重新加回来。
 
+### 24. modulemap `skipping 'LCEngineEntry.h' because module declaration lacks the 'framework' qualifier`
+公开头修好后，日志显示 `LCEngineEntry.h` 确实已经复制进 `LiveContainerShared.framework/Headers/`，但 Clang 仍报 umbrella header not found，并给出 note：module 声明缺少 `framework` 限定符。根因：我们手写的是普通 `module LiveContainerShared { ... }`，而 umbrella header 路径解析依赖 framework module 语义。
+修复：modulemap 首行改成 `framework module LiveContainerShared { ... }`。经验：framework 的 modulemap 必须以 `framework module` 开头，否则即使头文件在正确位置，Clang 也不会按 framework 规则解析 umbrella header。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
