@@ -85,12 +85,16 @@ public repo 的 standard runners（含 macOS）免费且无限，不消耗 priva
 **本地**：需要 macOS 15.3+ / Xcode 16.4（本机 MacBookPro12,1 达不到，编译请走 CI）。
 
 ```bash
-./scripts/prepare_dependencies.sh   # 含 xcodegen generate
-xcodebuild archive -project TreeNB.xcodeproj -scheme TreeNB \
+./scripts/prepare_dependencies.sh   # 拉上游 → 补丁 → xcodegen generate → fix_scheme.py
+xcodebuild archive -project TreeNB.xcodeproj -scheme TreeNB-App \
   -archivePath build/TreeNB.xcarchive -sdk iphoneos -arch arm64 \
   -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 ./scripts/assemble_ipa.sh
 ```
+
+> ⚠️ scheme 名是 `TreeNB-App`（不是 `TreeNB`）——避免与同名 target 冲突导致
+> xcodegen 生成空 archive action。`fix_scheme.py` 会从 pbxproj 重建正确 scheme。
+> 构建中遇到的其他坑见 `docs/CI构建踩坑记录.md`。
 
 ## 落地顺序（别跳步）
 

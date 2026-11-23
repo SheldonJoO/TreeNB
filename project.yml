@@ -47,6 +47,9 @@ settings:
     # App Group / URL scheme 归一，xcconfig 变量在 config/TreeNB.xcconfig 里定义
     APP_GROUP_IDENTIFIER: openssai.app
     LC_ENGINE_MODULE: LiveContainerShared
+    # openSSS 原工程工程级设置：SideSign 内部的 C 头文件搜索路径
+    SYSTEM_HEADER_SEARCH_PATHS:
+      - '$(SRCROOT)/upstream/openSSS/Dependencies/SideSign/Dependencies'
   configs:
     Debug:
       SWIFT_OPTIMIZATION_LEVEL: '-Onone'
@@ -61,6 +64,33 @@ settings:
 configFiles:
   Debug: config/TreeNB.xcconfig
   Release: config/TreeNB.xcconfig
+
+# ---------- Swift Package 依赖（照抄 openSSS 原工程）----------
+# 本地包由 prepare_dependencies.sh 随 openSSS tarball 一起落到 upstream/openSSS/Dependencies。
+# 远端包版本严格对齐原 AltStore.xcodeproj 的 packageReferences，避免 API 漂移。
+packages:
+  SideSign:
+    path: upstream/openSSS/Dependencies/SideSign
+  minimuxer:
+    path: upstream/openSSS/Dependencies/minimuxer
+  MarkdownKit:
+    url: https://github.com/bmoliveira/MarkdownKit.git
+    from: 1.7.3
+  KeychainAccess:
+    url: https://github.com/kishikawakatsumi/KeychainAccess
+    branch: master
+  Nuke:
+    url: https://github.com/kean/Nuke
+    exactVersion: 12.9.0
+  Starscream:
+    url: https://github.com/daltoniam/Starscream
+    from: 4.0.8
+  SemanticVersion:
+    url: https://github.com/SwiftPackageIndex/SemanticVersion
+    from: 0.4.0
+  CodeSignKit:
+    url: https://github.com/mahee96/CodeSignKit
+    branch: main
 
 # ---------- Targets ----------
 targets:
@@ -131,7 +161,22 @@ targets:
       - framework: LiveContainerSwiftUI.framework
         embed: true
         link: true
-      # openSSS 的三方依赖（OpenSSL / SideSign / minimuxer 等由 SPM + xcframework 提供）
+      # openSSS 原有的 SPM 依赖（主壳签名/续签/应用源全靠这些）
+      - package: SideSign
+        product: SideSign
+      - package: minimuxer
+        product: Minimuxer
+      - package: MarkdownKit
+        product: MarkdownKit
+      - package: KeychainAccess
+        product: KeychainAccess
+      - package: Nuke
+        product: Nuke
+      - package: Starscream
+        product: Starscream
+      - package: SemanticVersion
+        product: SemanticVersion
+      # OpenSSL.xcframework 单独在 Dependencies/ 下，见 prepare_dependencies.sh
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: Network.framework
@@ -218,6 +263,9 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: '16.0'   # WidgetKit 门禁 iOS16
         SWIFT_VERSION: '5.10'
     dependencies:
+      # openSSS 的 AltWidgetExtension 原本就链接 CodeSignKit（见 AltStore.xcodeproj）
+      - package: CodeSignKit
+        product: CodeSignKit
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
 
