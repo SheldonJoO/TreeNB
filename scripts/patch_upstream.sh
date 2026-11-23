@@ -84,7 +84,7 @@ else:
 PY
 fi
 
-# A4. LCBootstrap.m 删除 LCOpenSideStore 分支（用 #if !TREENB 包裹，保持可回溯）
+# A4. LCBootstrap.m 删除 LCOpenSideStore 分支（用 #if 0 完整包裹，保持可回溯）
 if [ -f "$LC/LiveContainer/LCBootstrap.m" ]; then
   python3 - "$LC/LiveContainer/LCBootstrap.m" <<'PY'
 import sys
@@ -92,10 +92,31 @@ p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 needle = 'if([lcUserDefaults boolForKey:@"LCOpenSideStore"]'
 if needle in s and 'TREENB_GUEST_BRANCH_REMOVED' not in s:
-    # 保守做法：把 openSSS guest 分支整段用 #if 0 包起来，不物理删，便于回溯
-    s = s.replace(needle, '#if 0 // TREENB_GUEST_BRANCH_REMOVED: openSSS 主壳化，不再作为 guest\n    if([lcUserDefaults boolForKey:@"LCOpenSideStore"]', 1)
-    open(p, 'w', encoding='utf-8').write(s)
-    print('  LCBootstrap.m: openSSS guest 分支已用 #if 0 屏蔽')
+    # 必须把整个 if 块用 #if 0 / #endif 成对包裹。早期版本只在 if 前插 #if 0
+    # 没补 #endif，导致编译报 Unterminated conditional directive。
+    idx = s.index(needle)
+    line_start = s.rfind('\n', 0, idx) + 1
+    indent = s[line_start:idx]
+    brace_start = s.index('{', idx)
+    depth, brace_end = 0, None
+    for i in range(brace_start, len(s)):
+        if s[i] == '{':
+            depth += 1
+        elif s[i] == '}':
+            depth -= 1
+            if depth == 0:
+                brace_end = i + 1
+                break
+    if brace_end is None:
+        print('  LCBootstrap.m: 找不到 if 块结束，跳过（请人工检查）')
+    else:
+        block = s[idx:brace_end]
+        wrapped = ('#if 0 // TREENB_GUEST_BRANCH_REMOVED: openSSS 主壳化，不再作为 guest\n'
+                   + indent + block + '\n'
+                   + indent + '#endif')
+        s = s[:idx] + wrapped + s[brace_end:]
+        open(p, 'w', encoding='utf-8').write(s)
+        print('  LCBootstrap.m: openSSS guest 分支已用 #if 0/#endif 完整屏蔽')
 else:
     print('  LCBootstrap.m: 无需改或已改过')
 PY

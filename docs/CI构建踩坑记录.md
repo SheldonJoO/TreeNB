@@ -85,6 +85,9 @@ xcodegen 的 `framework: LiveContainerShared.framework` 只写 link/embed，**�
 ### 12. `'Tweaks.h' file not found`（xcodegen 无 FileSystemSynchronized，头文件搜索路径要手动列全）
 `LivePlugInSupport/NSExtension+GuestHooks.m` 报找不到 `Tweaks.h`（在 `LiveContainer/Tweaks/`）。同样是 Xcode16 FileSystemSynchronized 自动纳管整棵源码树头文件、xcodegen 不负责的差异。修复：`LiveContainerShared` 的 `HEADER_SEARCH_PATHS` 列全 `LiveContainer/` 下所有含 `.h` 的子目录（`LiveContainer` 根、`Tweaks`、`LivePlugInSupport`）。经验：从上游 tree API 提取所有 `.h` 的父目录，一次加全，避免逐文件补。
 
+### 13. `LCBootstrap.m:827:6: Unterminated conditional directive`
+A4 补丁只在 `LCOpenSideStore` 分支的 `if` 前插了 `#if 0`，忘了补 `#endif`，预处理指令不配对。修复：用大括号深度匹配定位整个 if 块（从 `if(...)` 到配对的 `}`），一起包进 `#if 0 ... #endif`；本地用原始文件验证过 `#if`/`#endif` 计数 7:7。经验：物理删/屏蔽代码时，块边界必须用括号匹配算准，别只改首行。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
