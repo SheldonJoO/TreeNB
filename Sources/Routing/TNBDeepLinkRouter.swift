@@ -37,7 +37,11 @@ public final class TNBDeepLinkRouter {
 
         let host = url.host?.lowercased() ?? ""
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        let query = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value) })
+        // URLQueryItem.value 是 String?；过滤掉没有值的项，得到 [String: String]。
+        let query: [String: String] = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            guard let value = item.value else { return nil }
+            return (item.name, value)
+        })
 
         switch host {
         case "container-launch", "livecontainer-launch":

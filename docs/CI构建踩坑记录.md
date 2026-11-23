@@ -147,6 +147,10 @@ modulemap 修好后 Archive 走到主 App 源码编译才暴露：`project.yml` 
 ObjC 方法的尾参 `NSError **` 被 Swift 导入为 `throws`，参数标签会消失。`bootstrapWithError:` → `bootstrap() throws`；`launchGuestApp:...error:` → `launchGuestApp(_:containerFolder:launchURL:classicMode:) throws`。
 修复：ContainerViewModel / EngineSpikeProbe 改用 `do { try ... } catch { err = error as NSError }`。另修 `TNBDeepLinkRouter` 的 `queryItems ?? [:]`（数组不该用字典空字面量）与图标名多层字典下标转换。经验：Swift 调 ObjC NSError** API 一律按 throws 写，不要手传 `&error`。
 
+### 29. `'NavigationStack' is only available in iOS 16.0 or newer` + 深链可选值误用
+`NavigationStack` 是 iOS 16 API，而 TreeNB 主 App 部署目标仍是 iOS 15（见 §25）；Spike 面板和容器页都直接用了它。另 `URLQueryItem.value` 是 `String?`，`Dictionary(uniqueKeysWithValues:)` 得到的 query 值是 `String?`，`guard let bundle = query["bundle-name"], !bundle.isEmpty` 仍然拿到可选值。
+修复：两个文件各加一个 `AdaptiveNavigation`（`if #available(iOS 16) { NavigationStack } else { NavigationView }`）包装内容；深链 query 改为 `compactMap` 过滤无值项，得到 `[String: String]`。经验：低部署目标 App 里写 SwiftUI 新容器 API 必须做 availability 分支；从 `URLComponents.queryItems` 建字典时先解包 value。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

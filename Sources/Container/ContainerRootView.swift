@@ -21,7 +21,7 @@ struct ContainerRootView: View {
     @State private var errorMessage = ""
 
     var body: some View {
-        NavigationStack {
+        AdaptiveNavigation {
             Group {
                 if model.isBootstrapping {
                     ProgressView("正在初始化容器引擎…")
@@ -140,6 +140,26 @@ private struct GuestRow: View {
 
     private var displayName: String {
         (bundle as NSString).deletingPathExtension
+    }
+}
+
+// MARK: - iOS 15 兼容导航容器
+// NavigationStack 是 iOS 16+；TreeNB 主 App 仍以 iOS 15 为部署目标。
+private struct AdaptiveNavigation<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        Group {
+            if #available(iOS 16.0, *) {
+                NavigationStack { content }
+            } else {
+                NavigationView { content }
+            }
+        }
     }
 }
 

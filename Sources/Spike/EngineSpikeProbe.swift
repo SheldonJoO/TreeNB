@@ -148,7 +148,7 @@ public struct SpikeResultView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        SpikeAdaptiveNavigation {
             List {
                 Section {
                     ForEach(report.results) { r in
@@ -194,6 +194,26 @@ public struct SpikeResultView: View {
                 SwiftUI.Button("好", role: .cancel) {}
             }
             .onAppear { if report.results.isEmpty { EngineSpikeProbe.runSafeProbes() } }
+        }
+    }
+}
+
+// MARK: - iOS 15 兼容导航容器
+
+private struct SpikeAdaptiveNavigation<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        Group {
+            if #available(iOS 16.0, *) {
+                NavigationStack { content }
+            } else {
+                NavigationView { content }
+            }
         }
     }
 }
