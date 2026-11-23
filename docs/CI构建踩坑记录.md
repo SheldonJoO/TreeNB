@@ -151,6 +151,14 @@ ObjC 方法的尾参 `NSError **` 被 Swift 导入为 `throws`，参数标签会
 `NavigationStack` 是 iOS 16 API，而 TreeNB 主 App 部署目标仍是 iOS 15（见 §25）；Spike 面板和容器页都直接用了它。另 `URLQueryItem.value` 是 `String?`，`Dictionary(uniqueKeysWithValues:)` 得到的 query 值是 `String?`，`guard let bundle = query["bundle-name"], !bundle.isEmpty` 仍然拿到可选值。
 修复：两个文件各加一个 `AdaptiveNavigation`（`if #available(iOS 16) { NavigationStack } else { NavigationView }`）包装内容；深链 query 改为 `compactMap` 过滤无值项，得到 `[String: String]`。经验：低部署目标 App 里写 SwiftUI 新容器 API 必须做 availability 分支；从 `URLComponents.queryItems` 建字典时先解包 value。
 
+### 30. 主 App 链接报一堆 `XCTest.XCTAssert*` / `_OBJC_CLASS_$_XCTestCase` undefined
+TreeNB 的 `project.yml` 把 `upstream/openSSS/SideStore` 整棵树编进主 App，顺带收下了 `SideStore/Tests/**`（单元测试 + UI 测试）。这些文件引用 XCTest / Swift Testing / XCUITest，而主 App 没链这些框架。
+修复：SideStore source 加 `excludes: ['**/Tests/**']`。经验：上游仓库把测试目录和源码混在同一棵目录树时，xcodegen 递归 source 必须显式排除 Tests。
+
+### 31. `_location_simulation_new/free/set/clear` undefined symbols
+patch_upstream.sh §6 把 DeviceGateway 的 IDevice.xcframework 从"作者本机路径"换成官方 release URL。上游 Package.swift 注释已经警告：该 release 编译时没开 `location_simulation` feature，头文件声明了但二进制里没有这 4 个符号。主 App 链接时暴露。
+修复：新增 `Sources/Compat/location_simulation_stubs.c`，提供无副作用的 C 桩（new 返回静态哑句柄并置 NULL error，set/clear 返回 NULL，free 空操作），由 patch 挂进主 App 源码树。定位模拟不是 TreeNB 单包闭环的必需能力；将来换成带该 feature 的 xcframework 时删掉桩即可。经验：上游注释里的"本地构建才有" warning 是定时炸弹，CI 必须落实兼容桩或换二进制。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
