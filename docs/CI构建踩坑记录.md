@@ -163,6 +163,13 @@ patch_upstream.sh §6 把 DeviceGateway 的 IDevice.xcframework 从"作者本机
 Spike #55 首次构建成功，但解包发现 `Payload/TreeNB.app/` 里只有两个 LC framework 和 OpenSSL，没有小组件。原因：scheme 里虽然列了 `AltWidgetExtension`，那只保证扩展被**编译**；xcodegen 需要在主 App 的 dependencies 里写 `- target: AltWidgetExtension / embed: true` 才会生成 Embed App Extensions 阶段。
 修复：TreeNB.dependencies 加该依赖。经验：xcodegen 的 scheme entries ≠ app extension embed；检查 IPA 的 `PlugIns/` 目录比看编译日志更可靠。
 
+### 33. 真机侧载失败：LiveContainerSwiftUI.framework/Info.plist missing
+CI 全绿、IPA 也能解包，但爱思/侧载安装到真机时报：
+`APIInternalError (Info.plist missing at .../Frameworks/LiveContainerSwiftUI.framework/Info.plist)`。
+原因：`project.yml` 的 LiveContainerSwiftUI source 排除了 `**/Info.plist`，又没有指定 `INFOPLIST_FILE`，xcodegen 不会像原生工程那样自动生成一个；本机归档和 unzip 校验都不校验 framework 内 Info.plist，所以 CI 漏检。
+修复：新增 `config/LiveContainerSwiftUI-Info.plist`（标准 FMWK 键），target settings 里 `INFOPLIST_FILE` 指过去。
+经验：**IPA 能否安装 ≠ 能否编译**。framework 的 Info.plist 必须逐个核对；以后出包后应加一步 `unzip -p <ipa> Payload/*.app/Frameworks/*.framework/Info.plist | plutil` 自检，别等用户真机侧载才发现。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

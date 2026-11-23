@@ -256,6 +256,10 @@ targets:
       base:
         PRODUCT_NAME: LiveContainerSwiftUI
         PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.LiveContainerSwiftUI
+        # installd 逐个 framework 校验 Info.plist。sources 里排除了 **/Info.plist，
+        # 必须显式指定一份，否则真机安装报 "Info.plist missing at
+        # .../LiveContainerSwiftUI.framework/Info.plist"（本机归档不校验，CI 全绿也会漏）。
+        INFOPLIST_FILE: config/LiveContainerSwiftUI-Info.plist
         IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         SWIFT_VERSION: '5.10'
         # 原工程 SwiftUI target 靠 bridging header 让 Swift 看到 ObjC 类
