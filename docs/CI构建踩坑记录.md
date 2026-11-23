@@ -170,6 +170,15 @@ CI 全绿、IPA 也能解包，但爱思/侧载安装到真机时报：
 修复：新增 `config/LiveContainerSwiftUI-Info.plist`（标准 FMWK 键），target settings 里 `INFOPLIST_FILE` 指过去。
 经验：**IPA 能否安装 ≠ 能否编译**。framework 的 Info.plist 必须逐个核对；以后出包后应加一步 `unzip -p <ipa> Payload/*.app/Frameworks/*.framework/Info.plist | plutil` 自检，别等用户真机侧载才发现。
 
+### 34. 真机侧载第二次失败：LiveContainerShared.framework is missing its bundle executable
+修完 §33 后重装，installd 下一个错误：
+`App.app/Frameworks/LiveContainerShared.framework is missing its bundle executable... path ".../LiveContainerShared.framework/TreeApps"`。
+原因：上游 `LiveContainer/` 目录里带的是**整个 App 的 Info.plist**（`CFBundleExecutable=TreeApps`、`CFBundlePackageType=APPL`），xcodegen 把它当资源拷进 framework 当 plist；installd 按 plist 声明的 `TreeApps` 找可执行文件，但 framework 二进制实际叫 `LiveContainerShared`，找不到即拒装。
+修复：
+1. LiveContainerShared source 排除 `**/Info.plist`，新增 `config/LiveContainerShared-Info.plist`（标准 FMWK，`CFBundleExecutable=$(EXECUTABLE_NAME)`）并设 `INFOPLIST_FILE`。
+2. 上游那份 plist 里有 40+ 个 guest app 运行时要用的权限声明（相机/定位/蓝牙/NFC/相册/后台模式等），换成精简 FMWK plist 会丢——用脚本把这些键合并进主 App 的 `config/TreeNB-Info.plist`。
+经验：上游把 App plist 混在 framework 源码目录里是隐患；framework target 必须显式 `INFOPLIST_FILE` 指向 FMWK plist，别让资源里的 App plist 顶替。权限声明要从被替换的 plist 迁移到主 App，否则 guest app 申请权限时崩。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

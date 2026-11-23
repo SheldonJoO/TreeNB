@@ -206,6 +206,11 @@ targets:
         excludes:
           - 'main.c'                 # 入口剥离：不再由 dyld 首先命中
           - '**/*.h'                 # 头文件走 publicHeaders
+          # 上游这里带的是整个 App 的 Info.plist（CFBundleExecutable=TreeApps、
+          # CFBundlePackageType=APPL），它会被 xcodegen 当资源拷进 framework 当 plist。
+          # installd 校验 framework 时按 plist 里的 TreeApps 找可执行文件，找不到即拒装。
+          # 排除之，改用 config 下的标准 FMWK plist（见 INFOPLIST_FILE）。
+          - '**/Info.plist'
       # litehook 是 TreeNewBee 的 git submodule，prepare_dependencies.sh 单独拉取。
       # dyld_bypass_validation.m 用到 litehook_hook_function，必须把实现编进来。
       - path: upstream/TreeNewBee/litehook/src
@@ -222,6 +227,7 @@ targets:
       base:
         PRODUCT_NAME: LiveContainerShared
         PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.LiveContainerShared
+        INFOPLIST_FILE: config/LiveContainerShared-Info.plist
         IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         SWIFT_VERSION: '5.10'
         MODULEMAP_FILE: upstream/TreeNewBee/LiveContainer/TreeNBBridge/include/module.modulemap
