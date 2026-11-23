@@ -218,7 +218,7 @@ targets:
 
 # ---------- Schemes ----------
 schemes:
-  TreeNB:
+  TreeNB-App:
     build:
       targets:
         # 必须用合法 BuildType（all/testing/indexing/none），

@@ -34,7 +34,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SCHEME: TreeNB
+  SCHEME: TreeNB-App
   ARCHIVE_PATH: build/TreeNB.xcarchive
   DERIVED_DATA: build/DerivedData
 
