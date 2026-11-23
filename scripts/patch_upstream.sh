@@ -126,10 +126,10 @@ fi
 #      definition。多个 .m import 后会各自生成一份，xcodegen 工程下触发
 #      "duplicate symbol '_orig_dyld_fcntl' / '_orig_dyld_mmap'"。加 extern 变纯声明。
 if [ -f "$LC/LiveContainer/dyld_bypass_validation.h" ]; then
-  python3 - "$LC/LiveContainer/dyld_bypass_validation.h" <<'PY'
+  python3 - "$LC/LiveContainer/dyld_bypass_validation.h" "$LC/LiveContainer/dyld_bypass_validation.m" <<'PY'
 import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
+hp, mp = sys.argv[1], sys.argv[2]
+s = open(hp, encoding='utf-8').read()
 changed = False
 for decl in ('int (*orig_dyld_fcntl)(int fildes, int cmd, void *param);',
              'int (*orig_dyld_mmap)(int fildes, int cmd, void *param);'):
@@ -137,10 +137,24 @@ for decl in ('int (*orig_dyld_fcntl)(int fildes, int cmd, void *param);',
         s = s.replace(decl, 'extern ' + decl, 1)
         changed = True
 if changed:
-    open(p, 'w', encoding='utf-8').write(s)
+    open(hp, 'w', encoding='utf-8').write(s)
     print('  dyld_bypass_validation.h: orig_dyld_* 已加 extern，消除 tentative definition')
-else:
-    print('  dyld_bypass_validation.h: 无需改')
+
+# 加 extern 后变量变成纯声明，必须有一个 .m 提供唯一真定义，否则
+# 链接报 "Undefined symbols _orig_dyld_fcntl/_orig_dyld_mmap"。
+m = open(mp, encoding='utf-8').read()
+marker = '// TREENB: orig_dyld_* 唯一真定义'
+if marker not in m:
+    defs = (marker + '\n'
+            'int (*orig_dyld_fcntl)(int fildes, int cmd, void *param) = 0;\n'
+            'int (*orig_dyld_mmap)(int fildes, int cmd, void *param) = 0;\n')
+    anchor = '#include "dyld_bypass_validation.h"'
+    if anchor in m:
+        m = m.replace(anchor, anchor + '\n' + defs, 1)
+        open(mp, 'w', encoding='utf-8').write(m)
+        print('  dyld_bypass_validation.m: 已补 orig_dyld_* 唯一真定义')
+    else:
+        print('  dyld_bypass_validation.m: 找不到 anchor，请人工检查')
 PY
 fi
 

@@ -91,6 +91,9 @@ A4 补丁只在 `LCOpenSideStore` 分支的 `if` 前插了 `#if 0`，忘了补 `
 ### 14. `duplicate symbol '_orig_dyld_fcntl' / '_orig_dyld_mmap'`（链接阶段）
 第一次走到 `Ld LiveContainerShared.framework`，报 `Dyld.o` 与 `dyld_bypass_validation.o` 重复定义。根因：`dyld_bypass_validation.h` 里这两个函数指针写成 `int (*orig_dyld_fcntl)(...);`（无 `extern`），是 C 的 tentative definition，多个 `.m` import 后各生成一份。原工程 Xcode 16 默认合并 tentative defs，xcodegen 工程设置不同变成强符号冲突。修复：A4b 补丁给两个声明加 `extern`，变成纯声明；真定义仍在 `dyld_bypass_validation.m`。经验：C 头文件里的全局变量/函数指针声明必须写 `extern`。
 
+### 15. `Undefined symbols _orig_dyld_fcntl / _orig_dyld_mmap`（extern 化后的下一层）
+§14 加 `extern` 消除重复符号后，链接改报 undefined——因为这两个变量原本全靠头文件的 tentative definition 提供存储，加 extern 后没有 .m 真定义了。修复：A4b 同时在 `dyld_bypass_validation.m` 的 `#include "dyld_bypass_validation.h"` 后补唯一真定义（`= 0`），用 marker 保证幂等。经验：把 tentative definition 改成 extern 时，必须配套在某一个编译单元补真定义。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
