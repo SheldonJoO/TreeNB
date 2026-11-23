@@ -52,8 +52,10 @@ APP_ID = app['id']
 APP_NAME = app['name']
 BUILDABLE = APP_NAME + '.app'
 
+# 注意：属性必须写在开标签内（<BuildableReference\n  Key = "Val" ...>），
+# 不能写成 <BuildableReference>\n Key = "Val"（那样是文本内容，xcodebuild 会忽略）
 REF = (
-    '            <BuildableReference>\n'
+    '            <BuildableReference\n'
     '               BuildableIdentifier = "primary"\n'
     '               BlueprintIdentifier = "__APP_ID__"\n'
     '               BuildableName = "__BUILDABLE__"\n'
@@ -100,6 +102,17 @@ SCHEME = (
     '   </ArchiveAction>\n'
     '</Scheme>\n'
 ).replace('__BUILD_ENTRY__', BUILD_ENTRY).replace('__REF__', REF)
+
+# XML well-formed 校验
+import xml.etree.ElementTree as ET
+try:
+    root = ET.fromstring(SCHEME)
+except ET.ParseError as e:
+    print('[error] 生成的 scheme XML 非法: ' + str(e))
+    sys.exit(1)
+if root.find('ArchiveAction') is None or root.find('BuildAction') is None:
+    print('[error] scheme 缺少 ArchiveAction / BuildAction')
+    sys.exit(1)
 
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 open(OUT, 'w', encoding='utf-8').write(SCHEME)
