@@ -97,6 +97,12 @@ A4 补丁只在 `LCOpenSideStore` 分支的 `if` 前插了 `#if 0`，忘了补 `
 ### 16. Widget 一堆 `cannot find 'WidgetDataManager' / 'Direction' / 'ViewAppIntent' in scope`
 `LiveContainerShared` 链接终于过了，错误转到 `AltWidgetExtension`。根因：原工程 Widget 的 `fileSystemSynchronizedGroups = Shared + AltWidget`，还通过 SideStore group 编入 `Widget/WidgetData/*`、`Utils/pagination/PaginationDataHolder.swift`；我们只收了 `AltWidget/`。修复：`project.yml` 的 AltWidgetExtension sources 加 `upstream/openSSS/Shared`（排除 `Extensions/ALTApplication+AltStoreApp.swift`）、`SideStore/Widget/WidgetData`、`SideStore/Utils/pagination`。经验：Xcode16 FileSystemSynchronized 的 group 成员关系分散在多个 exception set 里，要按 pbxproj 逐个还原到 xcodegen sources。
 
+### 17. Widget `cannot find 'ThemeManager' / 'RefreshAllAppsWidgetIntent' / FileManager.documentsDirectory`
+补齐 Widget 源码后从 40 条错误降到 3 条，根因一致：原工程 Widget 定义了 `SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$inherited WIDGET_EXTENSION"`，源码里用 `#if WIDGET_EXTENSION` 切换 Widget 专用分支——`UIColor+AltStore` 靠它避开 `ThemeManager`，`RefreshAllAppsWidgetIntent` 靠它屏蔽主 App 依赖。我们漏了这个宏；另两个符号的源文件（`AltStore/Intents/.../RefreshAllAppsWidgetIntent.swift`、`AltStore/Extensions/FileManager+URLs.swift`）也没编进 Widget。
+修复分两步：
+1. `project.yml` 的 AltWidgetExtension 加 `WIDGET_EXTENSION`（Swift + GCC 两组），sources 补这两个文件。
+2. **关键陷阱**：Spike 构建原本用 xcodebuild 命令行全局覆盖 `SWIFT_ACTIVE_COMPILATION_CONDITIONS`，它会冲掉 target 级的 `WIDGET_EXTENSION`（`$(inherited)` 只继承 project 级，不含 target 级），导致非 Spike 能过、Spike 过不了。改为 `scripts/inject_spike.py` 在生成工程前纯文本注入 `TNB_SPIKE` 到 TreeNB target（幂等），CI 去掉命令行宏覆盖。经验：xcodebuild 命令行 build setting 是全局覆盖且优先级最高，多 target 不同宏需求时绝不能用它注入条件编译，要写进工程描述按 target 区分。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

@@ -272,6 +272,12 @@ targets:
           - 'Extensions/ALTApplication+AltStoreApp.swift'   # 依赖主 App，Widget 排外
       - path: upstream/openSSS/SideStore/Widget/WidgetData
       - path: upstream/openSSS/SideStore/Utils/pagination
+      # WIDGET_EXTENSION 宏下，View+AltWidget 用到 RefreshAllAppsWidgetIntent，
+      # WidgetLogManager 用到 FileManager.documentsDirectory（原定义在这两个文件）。
+      # 原工程靠 AltStore group 同步进来，xcodegen 必须显式列出；这两个文件内部
+      # 都有 #if WIDGET_EXTENSION/#if !WIDGET_EXTENSION 保护，不会引入主 App 依赖。
+      - path: upstream/openSSS/AltStore/Intents/App Intents/RefreshAllAppsWidgetIntent.swift
+      - path: upstream/openSSS/AltStore/Extensions/FileManager+URLs.swift
     info:
       path: config/AltWidget-Info.plist
       properties:
@@ -293,6 +299,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.AltWidgetExtension
         IPHONEOS_DEPLOYMENT_TARGET: '16.0'   # WidgetKit 门禁 iOS16
         SWIFT_VERSION: '5.10'
+        # 原工程 Widget 定义了 WIDGET_EXTENSION，源码里大量 #if WIDGET_EXTENSION
+        # 分支靠它切换（如 UIColor+AltStore 避开 ThemeManager、Intent 避开主 App 逻辑）。
+        # 漏掉会导致 cannot find 'ThemeManager' in scope 等连锁编译错误。
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS:
+          - '$(inherited)'
+          - WIDGET_EXTENSION
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - '$(inherited)'
+          - WIDGET_EXTENSION=1
     dependencies:
       # openSSS 的 AltWidgetExtension 原本就链接 CodeSignKit（见 AltStore.xcodeproj）
       - package: CodeSignKit

@@ -67,24 +67,18 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
-      # 拉上游源码 → 打单包补丁 → OpenSSL → xcodegen generate
+      # 拉上游源码 → 打单包补丁 → 注入 Spike 宏 → OpenSSL → xcodegen generate
       - name: Prepare dependencies & generate project
+        env:
+          SPIKE: ${{ inputs.spike }}
         run: ./scripts/prepare_dependencies.sh
 
       - name: Archive (no signing)
-        env:
-          SPIKE: ${{ inputs.spike }}
+        # 不再用命令行覆盖 SWIFT_ACTIVE_COMPILATION_CONDITIONS / GCC_PREPROCESSOR_DEFINITIONS：
+        # 命令行设置是全局的，会覆盖每个 target 的 target 级设置，且 $(inherited) 只继承
+        # project 级——会冲掉 Widget 的 WIDGET_EXTENSION，导致 cannot find 'ThemeManager' 等。
+        # Spike 宏已在 prepare 阶段由 inject_spike.py 精确注入到 TreeNB target。
         run: |
-          EXTRA=()
-          if [ "$SPIKE" = "true" ]; then
-            # Spike 包：打开 App 内自检面板，结果直接看红绿勾，无需 Mac 控制台。
-            # Swift 侧 #if TNB_SPIKE 走 SWIFT_ACTIVE_COMPILATION_CONDITIONS；
-            # C/ObjC 侧走 GCC_PREPROCESSOR_DEFINITIONS，两者都要给。
-            EXTRA=(
-              'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) TNB_SPIKE=1'
-              'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) TNB_SPIKE'
-            )
-          fi
           xcodebuild archive \
             -project TreeNB.xcodeproj \
             -scheme "$SCHEME" \
@@ -92,7 +86,7 @@ jobs:
             -sdk iphoneos -arch arm64 \
             -configuration Release \
             -derivedDataPath "$DERIVED_DATA" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO "${EXTRA[@]}"
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
       - name: Assemble unsigned IPA
         run: ./scripts/assemble_ipa.sh

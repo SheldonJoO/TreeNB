@@ -86,6 +86,17 @@ fi
 log "执行上游改造补丁"
 bash ./scripts/patch_upstream.sh
 
+# 3b. Spike 包：生成工程前给主 App target 注入 TNB_SPIKE 编译条件。
+# 必须在 xcodegen generate 之前做（改的是 project.yml 源描述）。
+# 不走 xcodebuild 命令行覆盖，避免全局宏冲掉 Widget 的 WIDGET_EXTENSION。
+if [ "${SPIKE:-false}" = "true" ]; then
+  log "注入 TNB_SPIKE 编译条件（Spike 包）"
+  python3 ./scripts/inject_spike.py
+else
+  # 保证幂等：非 Spike 构建移除可能残留的注入块（本地切回普通构建时）
+  python3 ./scripts/inject_spike.py --remove >/dev/null
+fi
+
 # 4. 生成工程
 if command -v xcodegen >/dev/null 2>&1; then
   log "xcodegen generate"
