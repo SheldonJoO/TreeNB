@@ -74,11 +74,14 @@ jobs:
         run: ./scripts/prepare_dependencies.sh
 
       - name: Archive (no signing)
+        id: archive
         # 不再用命令行覆盖 SWIFT_ACTIVE_COMPILATION_CONDITIONS / GCC_PREPROCESSOR_DEFINITIONS：
         # 命令行设置是全局的，会覆盖每个 target 的 target 级设置，且 $(inherited) 只继承
         # project 级——会冲掉 Widget 的 WIDGET_EXTENSION，导致 cannot find 'ThemeManager' 等。
         # Spike 宏已在 prepare 阶段由 inject_spike.py 精确注入到 TreeNB target。
         run: |
+          set -o pipefail
+          mkdir -p build
           xcodebuild archive \
             -project TreeNB.xcodeproj \
             -scheme "$SCHEME" \
@@ -86,7 +89,32 @@ jobs:
             -sdk iphoneos -arch arm64 \
             -configuration Release \
             -derivedDataPath "$DERIVED_DATA" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build/xcodebuild-archive.log
+
+      # 公开仓库的匿名访客看不到 Actions 原始日志；把编译错误以 annotation 形式暴露出来，
+      # 这样无需 GitHub 登录也能通过 check-runs annotations API 读到具体失败行。
+      - name: Report archive errors
+        if: failure() && steps.archive.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import os, re
+          path = 'build/xcodebuild-archive.log'
+          lines = open(path, encoding='utf-8', errors='replace').read().splitlines() if os.path.exists(path) else []
+          picked = []
+          patterns = (r'error:', r'FAILED:', r'fatal error:', r'ld: ', r'note: ', r'Compiling ')
+          for line in lines:
+              if any(re.search(p, line) for p in patterns):
+                  picked.append(line.strip())
+          # 优先呈现 error，最多 30 条，避免 annotation 上限截断
+          picked = sorted(set(picked), key=lambda x: (0 if 'error:' in x else 1, x))[:30]
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as out:
+              out.write('## Archive 编译错误摘要\n\n```\n')
+              out.write('\n'.join(picked) or '(没有匹配到错误行)')
+              out.write('\n```\n')
+          for line in picked[:20]:
+              msg = line.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')
+              print(f'::error::{msg}')
+          PY
 
       - name: Assemble unsigned IPA
         run: ./scripts/assemble_ipa.sh

@@ -30,57 +30,86 @@ if [ -f "$LC/LiveContainerSwiftUI/Views/TreeOpenSSSTabView.swift" ]; then
   ok "删除 TreeOpenSSSTabView.swift"
 fi
 
-# A2. 从 LCTabView 移除 openSSS Tab item
+# A2. 从 LCTabView 移除整个 openSSS Tab item
+# 早期按行启发式删除会留下一个孤立的 `}`（TabView 里少一个 item），
+# 导致 Swift 报 "expected declaration / extraneous '}' at top level"，
+# 后续 sharedModel / errorInfo 等一堆 cannot find 都是级联误报。
+# 现在改成：从 TreeOpenSSSTabView() 起，一直删到它对应的 .tag(...) 行（含），
+# 按 Swift 语法保证括号配对。
 if [ -f "$LC/LiveContainerSwiftUI/Views/LCTabView.swift" ]; then
   python3 - "$LC/LiveContainerSwiftUI/Views/LCTabView.swift" <<'PY'
-import sys, re
+import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 before = s
-# 删除含 TreeOpenSSSTabView / .tag(.openSSS) 的 TabView item 块（按行删，保守）
-lines = s.splitlines(keepends=True)
-out, skip = [], 0
-for ln in lines:
-    if 'TreeOpenSSSTabView' in ln or '.tag(.openSSS)' in ln:
-        skip = 1
-        continue
-    if skip:
-        # 跳过紧跟的 } / label 块中属于该 item 的行，直到遇到下一个 Tab 特征或空行
-        if ln.strip() in ('}', ')') or ln.strip().startswith('Label(') or 'Tree' in ln:
-            skip = 0
-        continue
-    out.append(ln)
-open(p, 'w', encoding='utf-8').write(''.join(out))
-print('  LCTabView.swift: %s' % ('已改' if ''.join(out) != before else '无需改（人工核对）'))
+if 'TREENB_OPENS_TAB_REMOVED' not in s:
+    lines = s.splitlines(keepends=True)
+    out, i, removed = [], 0, False
+    while i < len(lines):
+        if 'TreeOpenSSSTabView' in lines[i]:
+            # 吞掉整个 item：TreeOpenSSSTabView() → .tabItem { ... } → .tag(...)
+            while i < len(lines) and not (
+                '.tag(LCTabIdentifier.openSSS)' in lines[i] or '.tag(.openSSS)' in lines[i]
+            ):
+                i += 1
+            i += 1  # 跳过 .tag 行
+            while i < len(lines) and not lines[i].strip():
+                i += 1  # 跳过尾随空行
+            removed = True
+            continue
+        out.append(lines[i])
+        i += 1
+    s = ''.join(out)
+    s = s.replace(
+        '// TreeNewBee: 三个 Tab —— openSSS 放最左，点它一键进入内置 openSSS',
+        '// TreeNB: 两个 Tab —— App 与设置；openSSS 已是主 App 本身，无过场页'
+    )
+    if removed:
+        s = '// TREENB_OPENS_TAB_REMOVED: 单包架构，不再把 openSSS guest 化\n' + s
+    open(p, 'w', encoding='utf-8').write(s)
+print('  LCTabView.swift: %s' % ('已改' if s != before else '无需改（已幂等）'))
 PY
 fi
 
-# A3. 从 LCUtilsExtensions 删除 openSideStore() 函数
+# A3. 保留 openSideStore() 入口但改成单包 no-op
+# 不能整个删函数：LCAppListView / LCMultiLCManagementView 仍在调用它，
+# 删除后会产生 cannot find 'openSideStore' 成员错误。TreeNB 下 openSSS 就是主 App，
+# 这些调用的正确语义就是"不再跳转、直接返回"。
 if [ -f "$LC/LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift" ]; then
   python3 - "$LC/LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift" <<'PY'
 import sys, re
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-# 匹配 static func openSideStore(...) { ... }（含嵌套大括号，简单计数）
-pat = re.compile(r'\n\s*static func openSideStore\([^)]*\)\s*\{')
-m = pat.search(s)
-if m:
-    i = m.start(); depth = 0; j = m.end()-1
-    # 从函数体的 { 开始数
-    k = s.find('{', m.end()-1)
-    depth = 0
-    while k < len(s):
-        if s[k] == '{': depth += 1
-        elif s[k] == '}':
-            depth -= 1
-            if depth == 0:
-                k += 1; break
-        k += 1
-    s = s[:i] + s[k:]
-    open(p, 'w', encoding='utf-8').write(s)
-    print('  LCUtilsExtensions.swift: 已删除 openSideStore()')
+if 'TREENB_SIDESTORE_LAUNCH_DISABLED' not in s:
+    pat = re.compile(r'\n\s*static func openSideStore\([^)]*\)\s*\{')
+    m = pat.search(s)
+    if m:
+        k = s.find('{', m.end() - 1)
+        depth = 0
+        while k < len(s):
+            if s[k] == '{':
+                depth += 1
+            elif s[k] == '}':
+                depth -= 1
+                if depth == 0:
+                    k += 1
+                    break
+            k += 1
+        replacement = '''
+    // TREENB_SIDESTORE_LAUNCH_DISABLED: openSSS 已是主 App，不再拉起 guest。
+    // 保留签名只为兼容现有调用点，所有调用都在此直接返回。
+    static func openSideStore(delegate: LCAppModelDelegate? = nil, urlStr: String? = nil) {
+        _ = delegate
+        _ = urlStr
+    }
+'''
+        s = s[:m.start()] + replacement + s[k:]
+        open(p, 'w', encoding='utf-8').write(s)
+        print('  LCUtilsExtensions.swift: openSideStore() 改为单包 no-op')
+    else:
+        print('  LCUtilsExtensions.swift: 未找到 openSideStore()')
 else:
-    print('  LCUtilsExtensions.swift: 未找到 openSideStore()')
+    print('  LCUtilsExtensions.swift: 已幂等（no-op 已注入）')
 PY
 fi
 
