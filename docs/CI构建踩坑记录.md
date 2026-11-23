@@ -107,6 +107,18 @@ A4 补丁只在 `LCOpenSideStore` 分支的 `if` 前插了 `#if 0`，忘了补 `
 Widget 修好后错误转到 SwiftUI framework。根因：原工程 SwiftUI target 设了 `SWIFT_OBJC_BRIDGING_HEADER = LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h`，Swift 靠它看到一众 ObjC 类（`LCUtils`/`LCAppInfo`/`AppSceneViewController`/`PiPManager`/`LCSharedUtils` 及 `FoundationPrivate.h` 里的 `SecTaskCreateFromSelf` 等私有 API）。xcodegen 工程漏配 bridging header，Swift 侧一个类都看不到，级联出 393 条错误。
 修复：`project.yml` 的 LiveContainerSwiftUI 加 `SWIFT_OBJC_BRIDGING_HEADER`（指向原工程 header）+ `HEADER_SEARCH_PATHS`（SwiftUI 各含 .h 子目录 + LiveContainer 根/Tweaks/LivePlugInSupport）。bridging header 里 `#include "LCAppInfo.h"` 等是相对路径，靠搜索路径解析；`LCUtils.h` 又递归 import `LCMachOUtils.h`/`utils.h`（提供 `LCParseMachO`/`sideStoreExist`/`lcSharedDefaults` category），链条式全部可见。经验：Xcode 工程里 ObjC + Swift 混编 target 必须配 bridging header，xcodegen 不会自动生成；FileSystemSynchronized 项目的隐藏 include 关系要顺着 header 递归查。
 
+### 19. `LCTabView.swift:51 expected declaration / extraneous '}' at top level`
+Spike #52 卡在 SwiftUI 编译。根因：A2 补丁按行启发式删 openSSS Tab item，遇到 `TreeOpenSSSTabView()` 后只跳过若干"看起来像 item 的行"，结果留下了它对应的 `.tabItem { ... }` 闭合 `}`，而首行已被删掉，括号失衡。级联出 `sharedModel` / `errorInfo` / `sceneDelegate` 等 20+ 条 `cannot find ... in scope`，全是语法错误误报。
+修复：改为从 `TreeOpenSSSTabView()` 起一直删到同一 item 的 `.tag(LCTabIdentifier.openSSS)` 行（含），按 Swift 结构保证括号配对，并加 `TREENB_OPENS_TAB_REMOVED` marker 幂等。经验：删 SwiftUI View 的 Tab item 必须按完整语法块删，不能按行猜。
+
+### 20. `type 'LCUtils' has no member 'openSideStore'`
+A3 补丁把 `LCUtilsExtensions.swift` 里的 `openSideStore()` 整个删掉，但 `LCAppListView` / `LCMultiLCManagementView` 仍有调用点，于是编译报成员不存在。单包架构下这些调用的正确语义本来就是"不再跳转、直接返回"。
+修复：保留原函数签名，函数体改成 no-op（`_ = delegate` / `_ = urlStr`），加 `TREENB_SIDESTORE_LAUNCH_DISABLED` marker 幂等。经验：删除跨模块 API 前先全局搜索调用点；需要保持调用点兼容时，优先把实现降级成 no-op，而不是删声明。
+
+### 21. `'LiveContainerSwiftUI-Swift.h' file not found`（Spike #53）
+SwiftUI 语法修好后只剩这一条真实错误。`LCUtils.m` import 了 Swift 生成的 Objective-C 头文件；Swift 编译阶段确实生成了它（`.../LiveContainerSwiftUI.build/Objects-normal/arm64/LiveContainerSwiftUI-Swift.h`），但 xcodegen 生成的 ObjC 编译命令只带 `DerivedSources` 搜索路径，没带 `Objects-normal/arm64`。
+修复：`project.yml` 的 LiveContainerSwiftUI 显式设置 `SWIFT_OBJC_INTERFACE_HEADER_NAME: LiveContainerSwiftUI-Swift.h`，并把 `$(TARGET_TEMP_DIR)/Objects-normal/arm64`（及 armv7 兜底）加进 `HEADER_SEARCH_PATHS`。经验：混编 framework 里 ObjC 调 Swift 类时，生成头文件位于 `$(TARGET_TEMP_DIR)/Objects-normal/<arch>/`，不是 `DerivedSources`；xcodegen 不会自动补这条搜索路径。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：

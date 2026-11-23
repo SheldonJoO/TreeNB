@@ -248,9 +248,15 @@ targets:
         # （LCUtils/LCAppInfo/AppSceneViewController/PiPManager/LCSharedUtils 等）。
         # 漏配会导致大量 cannot find 'LCUtils' in scope。
         SWIFT_OBJC_BRIDGING_HEADER: '$(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h'
+        # Swift→ObjC 生成头文件默认落在 $(TARGET_TEMP_DIR)/Objects-normal/<arch>/，
+        # xcodegen 不会像 Xcode 原生工程那样自动把它加进 LCUtils.m 的搜索路径。
+        # 漏配会报 'LiveContainerSwiftUI-Swift.h' file not found。
+        SWIFT_OBJC_INTERFACE_HEADER_NAME: LiveContainerSwiftUI-Swift.h
         # bridging header 与 .m 用相对路径 include 头文件；原工程靠 FileSystemSynchronized
         # 把整棵树纳入搜索路径，xcodegen 需显式列出 SwiftUI 各子目录 + LiveContainer 根。
         HEADER_SEARCH_PATHS:
+          - $(TARGET_TEMP_DIR)/Objects-normal/arm64
+          - $(TARGET_TEMP_DIR)/Objects-normal/armv7
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI/Models
           - $(SRCROOT)/upstream/TreeNewBee/LiveContainerSwiftUI/MultitaskSupport
