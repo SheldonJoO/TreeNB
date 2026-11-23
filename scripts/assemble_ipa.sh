@@ -76,6 +76,17 @@ if [ -n "$LC_FW_BIN" ] && ! otool -L "$LC_FW_BIN" | grep -q 'libarchive'; then
 fi
 echo "  IPA 导入链路校验通过（真实解压 + libarchive 已链接）"
 
+echo "==> [1.7/4] 校验容器 bootstrap 不存在 nil 数组崩溃点"
+if grep -q '@\[self.bundleRoot, self.groupBundleRoot\]' "$ENGINE_SRC"; then
+  echo "致命错误: bootstrapWithError 用数组字面量装 groupBundleRoot，重签后 App Group 为 nil 会瞬间闪退。" >&2
+  exit 1
+fi
+if ! grep -q 'effectiveGroupRoot = groupRoot ?: docs' "$ENGINE_SRC"; then
+  echo "致命错误: bootstrapWithError 缺少 App Group nil fallback。" >&2
+  exit 1
+fi
+echo "  bootstrap nil 防护校验通过"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 

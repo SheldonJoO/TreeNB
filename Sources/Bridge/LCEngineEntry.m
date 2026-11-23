@@ -155,11 +155,19 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         // fallback：侧载环境真实 group 可能带 team 前缀，从运行时 entitlement 读
         groupRoot = [LCSharedUtils appGroupPath];
     }
-    self.groupBundleRoot = [groupRoot URLByAppendingPathComponent:@"LiveContainer/Applications"
+    // ★ 侧载重签后 App Group 极可能完全拿不到（groupRoot == nil）：
+    //   此时 groupBundleRoot 也是 nil，@[self.bundleRoot, self.groupBundleRoot]
+    //   会因插入 nil 抛 NSInvalidArgumentException，Swift 侧 do/catch 捕获不了，
+    //   表现就是「点容器 Tab 瞬间闪退」。fallback 到 Documents，保证容器始终可用。
+    NSURL *effectiveGroupRoot = groupRoot ?: docs;
+    self.groupBundleRoot = [effectiveGroupRoot URLByAppendingPathComponent:@"LiveContainer/Applications"
                                                        isDirectory:YES];
 
-    for (NSURL *root in @[self.bundleRoot, self.groupBundleRoot]) {
-        if (!root) { continue; }
+    // 同样禁止数组字面量里出现 nil：逐个 condition 添加。
+    NSMutableArray<NSURL *> *roots = [NSMutableArray arrayWithCapacity:2];
+    if (self.bundleRoot) { [roots addObject:self.bundleRoot]; }
+    if (self.groupBundleRoot) { [roots addObject:self.groupBundleRoot]; }
+    for (NSURL *root in roots) {
         NSError *createErr = nil;
         [fm createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:&createErr];
         if (createErr) {
