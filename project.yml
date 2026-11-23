@@ -184,7 +184,7 @@ targets:
 
   # ===== 4. Widget extension（openSSS AltWidget + TreeWidget 并入）=====
   AltWidgetExtension:
-    type: app_extension
+    type: appExtension
     platform: iOS
     sources:
       # patch_upstream.sh 把 TreeLaunchWidget.swift / TreeWidgetBridge.swift
