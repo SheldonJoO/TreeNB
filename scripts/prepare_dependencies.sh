@@ -73,20 +73,20 @@ if command -v xcodegen >/dev/null 2>&1; then
   # 这里从 BuildAction 段抓 TreeNB.app 的 BuildableReference，重建完整 ArchiveAction。
   python3 - <<'PYEOF'
 import glob, os, re, sys
-# xcodebuild CLI 只认 shared scheme
-schemes = glob.glob('TreeNB.xcodeproj/xcshareddata/xcschemes/TreeNB.xcscheme')
+# 优先 shared scheme，兜底 user scheme
+schemes = glob.glob('TreeNB.xcodeproj/xcshareddata/xcschemes/TreeNB.xcscheme') + \
+          glob.glob('TreeNB.xcodeproj/xcuserdata/*/xcschemes/TreeNB.xcscheme')
 if not schemes:
-    print('[warn] 未找到 shared scheme TreeNB.xcscheme，跳过')
-    sys.exit(0)
+    print('[error] 未找到 TreeNB.xcscheme')
+    sys.exit(1)
 p = schemes[0]
+print('[dbg] scheme path:', p)
 s = open(p, encoding='utf-8').read()
 
 # 从任意 BuildableReference 里找主 App 的（含自闭合与成对两种）
 refs = re.findall(r'<BuildableReference\b[^>]*?(?:/>|</BuildableReference>)', s, re.S)
-print('[dbg] scheme 中的 BuildableReference:')
-for r in refs:
-    bn = re.search(r'BuildableName="([^"]*)"', r)
-    print('   -', bn.group(1) if bn else '(no name)')
+print('[dbg] scheme 前 2500 字符:')
+print(s[:2500])
 app_ref = None
 for r in refs:
     bn = re.search(r'BuildableName="([^"]*)"', r)
