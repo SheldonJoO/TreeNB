@@ -155,6 +155,10 @@ targets:
         get-task-allow: false
     dependencies:
       # LC 引擎（多开核心）内嵌为 framework
+      # 注意：xcodegen 的 `framework:` 不会自动建立 target 依赖，必须显式写 target，
+      # 否则 xcodebuild 不会先编 framework，Swift 侧报 no such module。
+      - target: LiveContainerShared
+      - target: LiveContainerSwiftUI
       - framework: LiveContainerShared.framework
         embed: true
         link: true
@@ -228,6 +232,7 @@ targets:
           - '$(inherited)'
           - 'TREENB=1'
     dependencies:
+      - target: LiveContainerShared
       - framework: LiveContainerShared.framework
         embed: false
       - sdk: SwiftUI.framework

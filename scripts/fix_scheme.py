@@ -64,14 +64,41 @@ REF = (
     '            </BuildableReference>'
 ).replace('__APP_ID__', APP_ID).replace('__BUILDABLE__', BUILDABLE).replace('__APP_NAME__', APP_NAME)
 
-BUILD_ENTRY = (
-    '         <BuildActionEntry\n'
-    '            buildForTesting="YES" buildForRunning="YES"\n'
-    '            buildForProfiling="YES" buildForArchiving="YES"\n'
-    '            buildForAnalyzing="YES">\n'
-    '__REF__\n'
-    '         </BuildActionEntry>'
-).replace('__REF__', REF)
+def make_ref(t):
+    return (
+        '            <BuildableReference\n'
+        '               BuildableIdentifier = "primary"\n'
+        '               BlueprintIdentifier = "%s"\n'
+        '               BuildableName = "%s"\n'
+        '               BlueprintName = "%s"\n'
+        '               ReferencedContainer = "container:TreeNB.xcodeproj">\n'
+        '            </BuildableReference>'
+    ) % (t['id'], t['buildable'], t['name'])
+
+
+def make_build_entry(t):
+    return (
+        '         <BuildActionEntry\n'
+        '            buildForTesting="YES" buildForRunning="YES"\n'
+        '            buildForProfiling="YES" buildForArchiving="YES"\n'
+        '            buildForAnalyzing="YES">\n'
+        '%s\n'
+        '         </BuildActionEntry>'
+    ) % make_ref(t)
+
+
+# scheme 必须显式包含所有本地 target：xcodegen 的 `framework:` 依赖不会
+# 生成 target 依赖，只靠 buildImplicitDependencies 仍可能漏编 framework，
+# Swift 侧就会报 `no such module 'LiveContainerShared'`。
+PRODUCT_SUFFIX = {
+    'com.apple.product-type.application': '.app',
+    'com.apple.product-type.framework': '.framework',
+    'com.apple.product-type.app-extension': '.appex',
+}
+for _t in targets:
+    _t['buildable'] = _t['name'] + PRODUCT_SUFFIX.get(_t['productType'], '')
+
+BUILD_ENTRY = '\n'.join(make_build_entry(t) for t in targets)
 
 SCHEME = (
     '<?xml version="1.0" encoding="UTF-8"?>\n'

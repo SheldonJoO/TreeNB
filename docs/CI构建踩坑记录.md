@@ -65,6 +65,11 @@ openSSS 用目录隔离 iOS/tvOS 资源（如 `AltStore/News/tvOS/NewsCollection
 ### 7. `local binary target 'IDevice' ... does not contain a binary artifact`
 `Dependencies/minimuxer/DeviceGateway/Package.swift` 把 `IDevice.xcframework` 指向 `../../../local/idevice/swift/IDevice.xcframework`——该目录按上游注释**故意不进 git**，只存在于作者构建机，CI 必然失败。上游同一文件里保留了官方 release 的 `url` + `checksum`（注释掉的备选）。修复：`scripts/patch_upstream.sh` 的 A6 步骤把 `path:` 替换为 `url:` + `checksum:`，幂等。
 
+### 8. `no such module 'LiveContainerShared'`
+xcodegen 的 `framework: LiveContainerShared.framework` 只写 link/embed，**不会**自动生成 target 依赖；xcodebuild 的依赖图里 TreeNB 只显式依赖 SPM 包，两个 LC framework 根本没编，Swift 侧自然找不到 module。修复双保险：
+- `project.yml` 里 TreeNB 与 LiveContainerSwiftUI 都加显式 `- target: LiveContainerShared`（TreeNB 另加 `- target: LiveContainerSwiftUI`）；
+- `scripts/fix_scheme.py` 的 BuildAction/ArchiveAction 显式列出全部 4 个本地 target，不再只放主 App。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
