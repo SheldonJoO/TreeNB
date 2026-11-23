@@ -1,0 +1,233 @@
+# TreeNB (TreeNewBee2 / 🌲树应用) —— xcodegen 工程定义
+#
+# 设计原则（见 docs/启动链改造设计.md）：
+#   · openSSS 是主 executable / 主壳 —— 保留它的 AppDelegate、Shell、签名引擎、后台续签。
+#   · LiveContainer 降级为内嵌 framework（LCSharedUtils / LCBootstrap / LCMachOUtils + SwiftUI 列表）。
+#   · TreeWidget 并入 openSSS 已有的 AltWidgetExtension（单一 @main bundle）。
+#   · 彻底删除 openSSS-as-guest 的跳转分支与 dylibify/mangled-name hack。
+#
+# 上游源码不 vendored 进本仓库，靠 scripts/prepare_dependencies.sh 拉到 upstream/：
+#   upstream/openSSS     ← AltStore/ SideStore/ Shared/ AltWidget/ Dependencies/
+#   upstream/TreeNewBee  ← LiveContainer/ LiveContainerSwiftUI/ TreeWidget/
+#
+# 生成工程：xcodegen generate（CI 里由 prepare_dependencies.sh 调用）
+
+name: TreeNB
+options:
+  bundleIdPrefix: com.openssai
+  deploymentTarget:
+    iOS: '15.0'
+  createIntermediateGroups: true
+  sortGroups: false
+  generatedIncludes: []
+  fileTypes:
+    xcframework:
+      file: true
+
+# ---------- 共享构建设置 ----------
+settings:
+  base:
+    PRODUCT_NAME: TreeNB
+    SWIFT_VERSION: '5.10'
+    IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+    TARGETED_DEVICE_FAMILY: '1,2'
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    DEVELOPMENT_TEAM: AAAAA11111   # 签名时由 profile 覆盖
+    CLANG_ENABLE_MODULES: YES
+    CLANG_ENABLE_OBJC_ARC: YES
+    ENABLE_BITCODE: NO
+    SDKROOT: iphoneos
+    SUPPORTED_PLATFORMS: iphoneos
+    ALWAYS_SEARCH_USER_PATHS: NO
+    GCC_PREPROCESSOR_DEFINITIONS:
+      - '$(inherited)'
+      - 'TREENB=1'
+    # App Group / URL scheme 归一，xcconfig 变量在 config/TreeNB.xcconfig 里定义
+    APP_GROUP_IDENTIFIER: openssai.app
+    LC_ENGINE_MODULE: LiveContainerShared
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: '-Onone'
+      GCC_OPTIMIZATION_LEVEL: '0'
+      DEBUG_INFORMATION_FORMAT: dwarf
+      ENABLE_TESTABILITY: YES
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: '-O'
+      DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+      SWIFT_COMPILATION_MODE: wholemodule
+
+configFiles:
+  Debug: config/TreeNB.xcconfig
+  Release: config/TreeNB.xcconfig
+
+# ---------- Targets ----------
+targets:
+
+  # ===== 1. 主 App：openSSS 主壳 =====
+  TreeNB:
+    type: application
+    platform: iOS
+    sources:
+      # --- openSSS 本体（主 executable，含 @UIApplicationMain）---
+      # 注意：patch_upstream.sh 已把 Sources/Container、Sources/Routing 挂载到
+      # upstream/openSSS/AltStore/TreeNB/ 下，所以这里只列上游树一次，避免重复编译。
+      - path: upstream/openSSS/AltStore
+        excludes:
+          - '**/Info.plist'
+          - '**/*.entitlements'
+      - path: upstream/openSSS/SideStore           # 签名/续签/Anisette 引擎 Swift module
+      - path: upstream/openSSS/Shared
+      # --- 资源（AltStore 递归已含，此处显式声明便于 xcodegen 归类）---
+      - path: upstream/openSSS/AltStore/Assets.xcassets
+    info:
+      path: config/TreeNB-Info.plist
+      properties:
+        CFBundleDisplayName: 树应用
+        CFBundleIdentifier: com.openssai.app
+        CFBundleURLTypes:
+          - CFBundleURLName: com.openssai.app
+            CFBundleURLSchemes:
+              - openssai
+              - sidestore          # 兼容老深链
+              - livecontainer      # 兼容小组件/老用户
+        LSApplicationQueriesSchemes:
+          - openssai
+          - livecontainer
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: SceneDelegate
+        UIBackgroundModes:
+          - fetch
+          - processing
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+    entitlements:
+      path: config/TreeNB.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.$(APP_GROUP_IDENTIFIER)
+          - group.com.SideStore.SideStore
+          - group.com.kdt.livecontainer
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.openssai.app
+          - $(AppIdentifierPrefix)com.openssai.app.shared
+        application-identifier: $(AppIdentifierPrefix)com.openssai.app
+        get-task-allow: false
+    dependencies:
+      # LC 引擎（多开核心）内嵌为 framework
+      - framework: LiveContainerShared.framework
+        embed: true
+        link: true
+      - framework: LiveContainerSwiftUI.framework
+        embed: true
+        link: true
+      # openSSS 的三方依赖（OpenSSL / SideSign / minimuxer 等由 SPM + xcframework 提供）
+      - sdk: Security.framework
+      - sdk: UIKit.framework
+      - sdk: Network.framework
+
+  # ===== 2. LC 引擎 framework（从 TreeNewBee 源码编译）=====
+  LiveContainerShared:
+    type: framework
+    platform: iOS
+    sources:
+      - path: upstream/TreeNewBee/LiveContainer
+        excludes:
+          - 'main.c'                 # 入口剥离：不再由 dyld 首先命中
+          - '**/*.h'                 # 头文件走 publicHeaders
+      # patch_upstream.sh 把 LCEngineEntry.m + include/ 挂到 TreeNBBridge/ 下
+      # 所以这里的递归 source 已含 framework 新入口，无需再列 Sources/
+    publicHeaders:
+      - path: upstream/TreeNewBee/LiveContainer/TreeNBBridge/include
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.LiveContainerShared
+        IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+        SWIFT_VERSION: '5.10'
+        MODULEMAP_FILE: upstream/TreeNewBee/LiveContainer/TreeNBBridge/include/module.modulemap
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainer/TreeNBBridge/include
+          - $(SRCROOT)/upstream/TreeNewBee/LiveContainer
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - '$(inherited)'
+          - 'LIVE_CONTAINER_FRAMEWORK=1'   # 让 LC 代码走 framework 分支，不抢 UIApplicationMain
+    dependencies:
+      - sdk: Foundation.framework
+      - sdk: UIKit.framework
+
+  # ===== 3. LC SwiftUI 列表 framework（容器 Tab 的 UI）=====
+  LiveContainerSwiftUI:
+    type: framework
+    platform: iOS
+    sources:
+      - path: upstream/TreeNewBee/LiveContainerSwiftUI
+        excludes:
+          - '**/TreeOpenSSSTabView.swift'   # ★ 删除 openSSS 跳转过场页
+          - '**/Info.plist'
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.LiveContainerSwiftUI
+        IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+        SWIFT_VERSION: '5.10'
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - '$(inherited)'
+          - 'TREENB=1'
+    dependencies:
+      - framework: LiveContainerShared.framework
+        embed: false
+      - sdk: SwiftUI.framework
+
+  # ===== 4. Widget extension（openSSS AltWidget + TreeWidget 并入）=====
+  AltWidgetExtension:
+    type: app_extension
+    platform: iOS
+    sources:
+      # patch_upstream.sh 把 TreeLaunchWidget.swift / TreeWidgetBridge.swift
+      # 挂到 AltWidget/TreeNB/ 下，递归 source 已含，无需再列 Sources/Widget
+      - path: upstream/openSSS/AltWidget             # 已有单一 @main AltWidgetBundle
+        excludes:
+          - 'Info.plist'
+          - '**/*.entitlements'
+    info:
+      path: config/AltWidget-Info.plist
+      properties:
+        CFBundleDisplayName: 树应用小组件
+        CFBundleIdentifier: com.openssai.app.AltWidgetExtension
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: config/AltWidgetExtension.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.$(APP_GROUP_IDENTIFIER)
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.openssai.app
+          - $(AppIdentifierPrefix)com.openssai.app.shared
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: '16.0'   # WidgetKit 门禁 iOS16
+        SWIFT_VERSION: '5.10'
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+
+# ---------- Schemes ----------
+schemes:
+  TreeNB:
+    build:
+      targets:
+        LiveContainerShared: [debug, release]
+        LiveContainerSwiftUI: [debug, release]
+        TreeNB: [debug, release]
+        AltWidgetExtension: [debug, release]
+    run:
+      target: TreeNB
+    archive:
+      targets:
+        - TreeNB
+        - AltWidgetExtension

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.$(APP_GROUP_IDENTIFIER)</string>
+		<string>group.com.SideStore.SideStore</string>
+		<string>group.com.kdt.livecontainer</string>
+	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.openssai.app</string>
+		<string>$(AppIdentifierPrefix)com.openssai.app.shared</string>
+	</array>
+	<key>application-identifier</key>
+	<string>$(AppIdentifierPrefix)com.openssai.app</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>$(TEAM_ID)</string>
+	<key>get-task-allow</key>
+	<false/>
+</dict>
+</plist>

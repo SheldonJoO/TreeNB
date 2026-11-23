@@ -1,0 +1,7 @@
+// TreeNB 内嵌 LC 引擎的 Clang module 定义
+// 让 Swift 侧 import LiveContainerShared 时能拿到 C/ObjC 桥接符号
+module LiveContainerShared {
+    umbrella header "LCEngineEntry.h"
+    export *
+    module * { export * }
+}

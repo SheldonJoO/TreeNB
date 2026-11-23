@@ -1,0 +1,146 @@
+# TreeNB (TreeNewBee2 / 🌲树应用) 构建流水线
+#
+# 关键决策：
+#   - 仓库必须是 PUBLIC —— GitHub 对 public repo 的 standard runners 免费且无限，
+#     macOS 15 Intel runner 不消耗 private repo 的分钟额度。
+#   - 用 macos-15-intel（4 核 / 14GB），不用 macos-15 (M1/7GB)：
+#     openSSS + LC 混合 Swift/MachO 项目内存吃紧，7GB 容易 OOM。
+#   - 签名密钥全部走 GitHub Secrets，绝不硬编码；签名步骤只在 tag/release 触发，
+#     PR 和 push 只做无签名 archive 验证（保护 secrets）。
+
+name: TreeNB Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: "是否签名出正式 IPA（需要 Secrets）"
+        type: boolean
+        default: false
+      spike:
+        description: "打 Spike 自检包（App 内显示三问结果，无需 Mac 控制台）"
+        type: boolean
+        default: false
+  release:
+    types: [published]
+
+# 并发控制：同一分支只跑最新一次，省时间也省排队
+concurrency:
+  group: treenb-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: TreeNB
+  ARCHIVE_PATH: build/TreeNB.xcarchive
+  DERIVED_DATA: build/DerivedData
+
+jobs:
+  build:
+    name: Archive (unsigned)
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      # macos-15-intel 默认 Xcode 就是 16.4（项目所需版本），显式锁定避免漂移
+      - name: Select Xcode 16.4
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+
+      - name: Cache SPM packages
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      # 工程由 xcodegen 描述，避免手点 pbxproj
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # 拉上游源码 → 打单包补丁 → OpenSSL → xcodegen generate
+      - name: Prepare dependencies & generate project
+        run: ./scripts/prepare_dependencies.sh
+
+      - name: Archive (no signing)
+        env:
+          SPIKE: ${{ inputs.spike }}
+        run: |
+          EXTRA=()
+          if [ "$SPIKE" = "true" ]; then
+            # Spike 包：打开 App 内自检面板，结果直接看红绿勾，无需 Mac 控制台。
+            # Swift 侧 #if TNB_SPIKE 走 SWIFT_ACTIVE_COMPILATION_CONDITIONS；
+            # C/ObjC 侧走 GCC_PREPROCESSOR_DEFINITIONS，两者都要给。
+            EXTRA=(
+              'GCC_PREPROCESSOR_DEFINITIONS=$(inherited) TNB_SPIKE=1'
+              'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) TNB_SPIKE'
+            )
+          fi
+          xcodebuild archive \
+            -project TreeNB.xcodeproj \
+            -scheme "$SCHEME" \
+            -archivePath "$ARCHIVE_PATH" \
+            -sdk iphoneos -arch arm64 \
+            -configuration Release \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO "${EXTRA[@]}"
+
+      - name: Assemble unsigned IPA
+        run: ./scripts/assemble_ipa.sh
+
+      - name: Upload unsigned artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # Spike 包与正式包分开命名，避免下载错
+          name: TreeNB-${{ inputs.spike == true && 'spike' || 'unsigned' }}
+          path: build/*.ipa
+          retention-days: 14
+
+  sign:
+    name: Sign & Release
+    needs: build
+    # 只有 tag/release 或手动勾选 sign 才签名，避免 PR 触碰 secrets
+    # Spike 包不签名（用户自行侧载），且 artifact 名不同，故排除
+    if: >-
+      (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.sign))
+      && inputs.spike != true
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download unsigned IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: TreeNB-unsigned
+          path: build/
+
+      - name: Import signing certificate
+        env:
+          CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE }}
+        run: ./scripts/sign_ipa.sh
+
+      - name: Upload signed IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: TreeNB-signed
+          path: build/*-signed.ipa
+          retention-days: 90
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*-signed.ipa

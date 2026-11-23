@@ -1,0 +1,34 @@
+// TreeNB 工程全局配置
+// 单包方案：openSSS 为主壳（bundle id 沿用 com.openssai.app 保证数据/证书迁移无损），
+// LiveContainer 多开引擎以 framework 内嵌，TreeWidget 以 appex 内嵌。
+
+// —— 身份 ——
+PRODUCT_BUNDLE_IDENTIFIER = com.openssai.app
+TREENB_DISPLAY_NAME = 树应用
+// 兼容 openSSS 原深链，同时接纳 livecontainer 深链（小组件/老用户）
+TREENB_URL_SCHEME = openssai
+
+// —— 平台 ——
+// openSSS 主工程 iOS 15；TreeWidget iOS 16，用 @available 门禁（见方案 §风险5）
+IPHONEOS_DEPLOYMENT_TARGET = 15.0
+SUPPORTED_PLATFORMS = iphoneos
+SDKROOT = iphoneos
+TARGETED_DEVICE_FAMILY = 1,2
+
+// —— Swift ——
+SWIFT_VERSION = 5.10
+SWIFT_EMIT_LOC_STRINGS = YES
+
+// —— 签名（CI 用无签名 archive，本地开发用 Development team） ——
+CODE_SIGN_STYLE = Manual
+DEVELOPMENT_TEAM = AAAAA11111 // 占位，签名时由 provisioning profile 决定
+CODE_SIGNING_ALLOWED = NO
+
+// —— App Group（沿用 openSSS 主 group，保留 fallback 兼容老数据） ——
+TREENB_APP_GROUP = group.com.openssai.app
+LEGACY_SIDESTORE_GROUP = group.com.SideStore.SideStore
+LEGACY_LC_GROUP = group.com.kdt.livecontainer
+
+// —— 模块名（openSSS 引擎层叫 SideStore，保持不变以复用其依赖） ——
+OPENSSS_MODULE = SideStore
+LC_ENGINE_MODULE = LiveContainerShared
