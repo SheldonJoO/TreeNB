@@ -27,7 +27,8 @@ options:
 # ---------- 共享构建设置 ----------
 settings:
   base:
-    PRODUCT_NAME: TreeNB
+    # 注意：不要在这里设 PRODUCT_NAME！会被所有 target 继承，framework 会
+    # 产出 TreeNB.framework 与主 App 冲突。每个 target 自己声明。
     SWIFT_VERSION: '5.10'
     IPHONEOS_DEPLOYMENT_TARGET: '15.0'
     TARGETED_DEVICE_FAMILY: '1,2'
@@ -99,6 +100,9 @@ targets:
   TreeNB:
     type: com.apple.product-type.application
     platform: iOS
+    settings:
+      base:
+        PRODUCT_NAME: TreeNB
     sources:
       # --- openSSS 本体（主 executable，含 @UIApplicationMain）---
       # 注意：patch_upstream.sh 已把 Sources/Container、Sources/Routing 挂载到
@@ -200,6 +204,7 @@ targets:
       - path: upstream/TreeNewBee/LiveContainer/TreeNBBridge/include
     settings:
       base:
+        PRODUCT_NAME: LiveContainerShared
         PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.LiveContainerShared
         IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         SWIFT_VERSION: '5.10'
@@ -225,6 +230,7 @@ targets:
           - '**/Info.plist'
     settings:
       base:
+        PRODUCT_NAME: LiveContainerSwiftUI
         PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.LiveContainerSwiftUI
         IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         SWIFT_VERSION: '5.10'
@@ -265,6 +271,8 @@ targets:
           - $(AppIdentifierPrefix)com.openssai.app.shared
     settings:
       base:
+        PRODUCT_NAME: AltWidgetExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.AltWidgetExtension
         IPHONEOS_DEPLOYMENT_TARGET: '16.0'   # WidgetKit 门禁 iOS16
         SWIFT_VERSION: '5.10'
     dependencies:

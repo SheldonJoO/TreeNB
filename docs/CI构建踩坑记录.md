@@ -70,6 +70,9 @@ xcodegen 的 `framework: LiveContainerShared.framework` 只写 link/embed，**�
 - `project.yml` 里 TreeNB 与 LiveContainerSwiftUI 都加显式 `- target: LiveContainerShared`（TreeNB 另加 `- target: LiveContainerSwiftUI`）；
 - `scripts/fix_scheme.py` 的 BuildAction/ArchiveAction 显式列出全部 4 个本地 target，不再只放主 App。
 
+### 9. `Multiple commands produce .../TreeNB.framework`
+`settings.base` 里写了全局 `PRODUCT_NAME: TreeNB`，被所有 target 继承，导致 `LiveContainerShared` / `LiveContainerSwiftUI` 两个 framework 也产出 `TreeNB.framework`，与主 App 产物同名冲突。修复：从全局移除 `PRODUCT_NAME`，在每个 target 的 `settings.base` 分别声明。顺手给 Widget 补上独立 `PRODUCT_BUNDLE_IDENTIFIER`，避免被全局 xcconfig 的 `com.openssai.app` 覆盖。
+
 ## 推送代码的正确姿势（本机）
 
 GitHub 连接器（`mcp__github`）的写工具被 GitHub App 权限挡住（`create_repository`/`push_files` 均 403 `Resource not accessible by integration`）。**改用本机 keychain 里的 PAT**：
