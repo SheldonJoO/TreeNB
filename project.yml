@@ -141,12 +141,16 @@ targets:
           - openssai
           - livecontainer
         UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
+          UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations:
             UIWindowSceneSessionRoleApplication:
               - UISceneConfigurationName: Default Configuration
-                UISceneDelegateClassName: SceneDelegate
-                # 黑屏修复：原版 openSSS 靠 storyboard 自动建 root VC，
+                # 黑屏修复 2/2：Swift 模块化后 SceneDelegate 的真实类名是
+                # TreeNB.SceneDelegate（mangled: _TtC6TreeNB13SceneDelegate）。
+                # 裸名 SceneDelegate 系统找不到类 → scene 加载失败 → window 无 root → 纯黑。
+                # 用 $(PRODUCT_MODULE_NAME) 展开成 TreeNB，与原版写法一致。
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+                # 黑屏修复 1/2：原版 openSSS 靠 storyboard 自动建 root VC，
                 # SceneDelegate.willConnectTo 不手动创建 window/root。
                 # 缺这两个键 → 系统建了 window 却不知道加载哪个 storyboard → 全黑屏。
                 UISceneStoryboardFile: Main

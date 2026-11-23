@@ -37,6 +37,16 @@ if [ "$STORYBOARD" != "Main" ]; then
 fi
 echo "  SceneManifest 含 UISceneStoryboardFile=Main，校验通过"
 
+DELEGATE=$(/usr/libexec/PlistBuddy -c "Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName" "$APP/Info.plist" 2>/dev/null || true)
+case "$DELEGATE" in
+  *".SceneDelegate") echo "  UISceneDelegateClassName=$DELEGATE，校验通过" ;;
+  *)
+    echo "致命错误: UISceneDelegateClassName='$DELEGATE' 是裸名或缺失！Swift 模块化后真实类名是 <Module>.SceneDelegate（本包为 TreeNB.SceneDelegate）；裸名导致系统找不到 delegate 类，scene 加载失败、window 无 root、启动纯黑屏。" >&2
+    echo "请在 project.yml 用 UISceneDelegateClassName: \$(PRODUCT_MODULE_NAME).SceneDelegate 后重新构建。" >&2
+    exit 1
+    ;;
+esac
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 
