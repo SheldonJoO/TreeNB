@@ -137,7 +137,11 @@ static WKWebsiteDataStore *data_store(void)
             for (const char *q = u; *q; q++) { h1 = (h1 ^ (uint8_t)*q) * 1099511628211ull; h2 = (h2 ^ (uint8_t)*q) * 0x100000001b3ull + 7; }
             memcpy(b, &h1, 8); memcpy(b + 8, &h2, 8);
             b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
-            g_store = [WKWebsiteDataStore dataStoreForIdentifier:[[NSUUID alloc] initWithUUIDBytes:b]];
+            /* TreeNB: dataStoreForIdentifier: 是 iOS 17 API。用运行时检查在老系统上降级。 */
+            NSUUID *storeID = [[NSUUID alloc] initWithUUIDBytes:b];
+            if ([WKWebsiteDataStore respondsToSelector:@selector(dataStoreForIdentifier:)]) {
+                g_store = [WKWebsiteDataStore performSelector:@selector(dataStoreForIdentifier:) withObject:storeID];
+            }
         }
     }
     if (!g_store) g_store = [WKWebsiteDataStore defaultDataStore];
@@ -249,7 +253,8 @@ static NSString *bridge_js(void)
     _web.navigationDelegate = self;
     _web.UIDelegate = self;
     _web.customUserAgent = @"Mozilla/5.0 (Linux; Android 14; Husk; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/140.0.0.0 Mobile Safari/537.36";
-    if (@available(iOS 16.4, macOS 13.3, *)) _web.inspectable = YES;
+    /* TreeNB: inspectable 在 iOS 16.4+ 才有；用 KVC 避免旧 SDK 编译期报属性不存在。 */
+    if (@available(iOS 16.4, macOS 13.3, *)) { @try { [_web setValue:@YES forKey:@"inspectable"]; } @catch (NSException *e) {} }
 #if !TARGET_OS_IPHONE
     /* the harness's window is nearly all off screen: without this WebKit calls the page hidden and pages that wait to be seen
        (EA's consent dialog fades in on visibility) never show */

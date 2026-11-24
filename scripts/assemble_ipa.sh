@@ -493,6 +493,34 @@ if ! grep -q 'TNBLastGuestLaunchError' "$ENGINE_SRC"; then
 fi
 echo "  JIT-less 签名链路校验通过（ZSign.dylib + 证书导入 + 无密码支持 + 错误透传 + UI 均在）"
 
+# Husk 翻译层（安卓 APK 运行引擎）构建期铁证
+echo "==> 校验 Husk 翻译层（APK 运行引擎）"
+if [ ! -d "$APP/Frameworks/HuskyEngine.framework" ]; then
+  echo "致命错误: 包内缺少 Frameworks/HuskyEngine.framework！翻译层未编入。请检查 project.yml 的 HuskyEngine target。" >&2
+  exit 1
+fi
+if [ ! -f "$APP/Frameworks/HuskyEngine.framework/HuskyEngine" ] && [ ! -f "$APP/Frameworks/HuskyEngine.framework/Husky" ]; then
+  echo "警告: HuskyEngine.framework 未找到可执行文件，检查 PRODUCT_NAME。"
+fi
+if ! find "$APP" -name 'libANGLE-shared.dylib' | grep -q .; then
+  echo "致命错误: 包内缺少 libANGLE-shared.dylib！游戏渲染会失败。检查 project.yml 资源段。" >&2
+  exit 1
+fi
+if ! find "$APP" -name 'cacert.pem' | grep -q .; then
+  echo "警告: 包内缺少 cacert.pem，游戏的 HTTPS 证书校验可能失败。"
+fi
+# 加号菜单 APK 入口（源码级校验，Swift 字符串编译后会被拆分，字节流搜不到）
+SHELL_SRC="upstream/openSSS/AltStore/Shell/AppsViewController.swift"
+if [ -f "$SHELL_SRC" ] && ! grep -q 'onInstallAPK' "$SHELL_SRC"; then
+  echo "致命错误: 加号菜单未注入 APK 入口（onInstallAPK）。检查 patch_upstream.sh 的 C2 段。" >&2
+  exit 1
+fi
+if ! grep -q 'org.android.package-archive' project.yml; then
+  echo "致命错误: project.yml 未声明 .apk 文档类型，文件选择器选不了 APK。" >&2
+  exit 1
+fi
+echo "  Husk 翻译层校验通过（framework + ANGLE + 证书 + 加号入口 + APK 文档类型）"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 

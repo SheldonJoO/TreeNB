@@ -18,6 +18,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+/* TreeNB: iOS 16 SDK 需要 net/if.h 在 b_if_nametoindex (line ~608) 之前声明，
+   否则 if_nametoindex 隐式声明为 int 与 SDK 的 unsigned int 冲突。 */
+#include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <pthread.h>

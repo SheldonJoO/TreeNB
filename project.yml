@@ -409,6 +409,12 @@ targets:
         excludes:
           - '**/*.h'
           - '**/*.inc'
+      # 旧 translation-layer：提供 husk_tl_scan / read_entry / free（引擎检测用）。
+      # Husk 官方工程同样把它整目录编进 app；不依赖 QEMU。与新目录无符号冲突。
+      - path: vendor/husk/src/translation-layer
+        excludes:
+          - '**/*.h'
+          - '**/*.inc'
       # ObjC wrapper（HuskyEngine.h/.m + modulemap）
       - path: vendor/husk/bridge
         excludes:
