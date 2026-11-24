@@ -204,6 +204,44 @@ if [ -f "$SETTINGS_SRC" ] && ! grep -q 'TNBOSUpdateBlockerView' "$SETTINGS_SRC";
   exit 1
 fi
 echo "  新鲜度门 + 中文名 + Link 深链 + Anisette 默认值 + 屏蔽更新入口校验通过"
+
+# ★ 本轮（2026-11-24 深夜）硬校验：
+# A) widget 深链 host 必须是 livecontainer-launch（guest 前台切换才不被 hook 吞）。
+TWB="upstream/openSSS/AltWidget/TreeNB/TreeWidgetBridge.swift"
+if [ -f "$TWB" ] && ! grep -q 'openssai://livecontainer-launch' "$TWB"; then
+  echo "致命错误: widget 深链 host 不是 livecontainer-launch，guest 前台点组件无反应。" >&2
+  exit 1
+fi
+# B) 上游 URL 启动路径补写新鲜度标记（guest 前台切换重启后能被冷启接管）。
+LCUTIL="upstream/TreeNewBee/LiveContainer/LCSharedUtils.m"
+if [ -f "$LCUTIL" ] && ! grep -q 'TNBGuestLaunchIntentTS' "$LCUTIL"; then
+  echo "致命错误: launchToGuestAppWithURL 未补 TNBGuestLaunchIntentTS，guest 前台切换会退回宿主。" >&2
+  exit 1
+fi
+# C) 免确认开关（点组件直接切换，不弹确认框）。
+if ! grep -q 'LCSwitchAppWithoutAsking' "$ENGINE_SRC"; then
+  echo "致命错误: 未设置 LCSwitchAppWithoutAsking，guest 前台切换会弹确认框。" >&2
+  exit 1
+fi
+# D) 「我的」Tab 管理区屏蔽更新入口（用户真正能找到的位置）。
+PROFILE_SRC="upstream/openSSS/AltStore/Shell/ProfileViewController.swift"
+if [ -f "$PROFILE_SRC" ] && ! grep -q 'case appearance, storage, osUpdateBlock' "$PROFILE_SRC"; then
+  echo "致命错误: 管理区未加入屏蔽 iOS 更新入口。" >&2
+  exit 1
+fi
+# E) 关于页品牌归一。
+ABOUT_SRC="upstream/openSSS/AltStore/Shell/AboutViewController.swift"
+if [ -f "$ABOUT_SRC" ] && ! grep -q 'TreeNewBee Ⅱ' "$ABOUT_SRC"; then
+  echo "致命错误: 关于页未改成 TreeNewBee Ⅱ。" >&2
+  exit 1
+fi
+# F) 容器页标题去重（VC 不得再设 title="容器"）。
+CTVC="upstream/openSSS/AltStore/TreeNB/Container/ContainerTabViewController.swift"
+if [ -f "$CTVC" ] && grep -q 'title = "容器"' "$CTVC"; then
+  echo "致命错误: 容器页 VC 仍设 title=容器，顶部会出现两个标题。" >&2
+  exit 1
+fi
+echo "  widget livecontainer-launch + URL 新鲜度 + 免确认 + 管理区入口 + 品牌归一 + 标题去重校验通过"
 if ! grep -q 'ensureHostLaunchOverrides' "$ENGINE_SRC"; then
   echo "致命错误: 缺少宿主 URL scheme / App Group 覆盖注入，重签后 lcAppUrlScheme/lcAppGroupPath 会拿错导致 guest 闪退。" >&2
   exit 1

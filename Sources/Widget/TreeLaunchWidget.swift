@@ -7,11 +7,13 @@
 //  （本文件不含 @main，因为 openSSS 已有唯一 @main AltWidgetBundle）
 //
 //  显示 TreeNB 容器里侧载的 App。点击统一用 Link 深链（上游 LC 真机验证方案）：
-//    openssai://container-launch?bundle-name=X
-//  系统唤起主 App 后由 SceneDelegate → TNBDeepLinkRouter → launchGuestApp 精确启动
-//  指定 guest。App Intent（Button(intent:)）方案在侧载 widget 上实测点击无响应
-//  （perform 不触发 / OpenURLIntent 被系统拦截），已弃用，仅保留文件不挂到视图上。
-//  冷启动"残留 selected 抢先接管"的问题由引擎侧 TNBGuestLaunchIntentTS 新鲜度门解决。
+//    openssai://livecontainer-launch?bundle-name=X
+//  host 必须是 livecontainer-launch —— guest 前台时 LiveContainer 的 TweakLoader
+//  hook 只认这个 host 做 App 切换；用 container-launch 会被静默吞掉（点组件无反应）。
+//  两条路径都能精确启动指定 guest：
+//    · guest 前台：hook → launchToGuestAppWithURL → 写 selected + 新鲜度标记 → 重启接管
+//    · 宿主前台/冷启：SceneDelegate → TNBDeepLinkRouter → launchGuestApp → 重启接管
+//  App Intent（Button(intent:)）方案在侧载 widget 上实测点击无响应，已弃用。
 //
 
 import SwiftUI

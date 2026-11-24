@@ -312,6 +312,18 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     }
     if (scheme.length) { [d setObject:scheme forKey:@"TNBHostUrlScheme"]; }
 
+    // 小组件/guest 间切换 App 免确认框：guest 前台时 TweakLoader hook 的
+    // LCHandleControlAppURL 收到 livecontainer-launch 深链会走切换分支，
+    // LCShowSwitchAppConfirmation 检查 LCSwitchAppWithoutAsking；为 YES 时
+    // 直接 launchToGuestAppWithURL 不弹"是否切换"确认。侧载树上写 standard
+    // 与 shared 两份，覆盖 hook 里 lcUserDefaults / lcSharedDefaults 两种读法。
+    [d setBool:YES forKey:@"LCSwitchAppWithoutAsking"];
+    NSUserDefaults *groupDefaults = [[NSUserDefaults alloc] initWithSuiteName:@"group.openssai.app"];
+    if (groupDefaults) {
+        [groupDefaults setBool:YES forKey:@"LCSwitchAppWithoutAsking"];
+        [groupDefaults synchronize];
+    }
+
     // App Group 容器根：上游要的是根（它自己再拼 LiveContainer/Data/...）。
     // 已声明 group → LCSharedUtils.appGroupID → Documents 兜底，绝不为 nil。
     NSFileManager *fm = [NSFileManager defaultManager];

@@ -21,7 +21,8 @@ public final class ContainerTabViewController: UIViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        title = "容器"
+        // 标题统一由内嵌 SwiftUI 的 .navigationTitle("🌲TreeApps") 设置。
+        // 这里不再设 title —— 之前 VC 与 SwiftUI 各设一次，导致顶部出现两个"容器"。
         view.backgroundColor = .systemBackground
 
         let root = ContainerRootView()

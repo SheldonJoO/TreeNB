@@ -41,7 +41,7 @@ struct ContainerRootView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
-            .navigationTitle("容器")
+            .navigationTitle("🌲TreeApps")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {

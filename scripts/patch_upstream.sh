@@ -266,6 +266,35 @@ else:
 PY
 fi
 
+# A4f. 小组件在 guest 前台切换 App 时，走 TweakLoader hook → launchToGuestAppWithURL，
+# 这条路写 selected 但不写 TreeNB 冷启动接管需要的新鲜度标记 TNBGuestLaunchIntentTS，
+# 导致重启后被 takeOverIfGuestPending 的 15s 门拦下（ts=0）→ 退回宿主，表现为
+# "点组件开哪个都是上次那个"。在 launchToGuestAppWithURL 写 selected 处补齐标记。
+if [ -f "$LC/LiveContainer/LCSharedUtils.m" ]; then
+  python3 - "$LC/LiveContainer/LCSharedUtils.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TREENB_URL_LAUNCH_TS' in s:
+    print('  LCSharedUtils.m: URL 启动新鲜度标记已注入（幂等）')
+else:
+    old = '''        [lcUserDefaults setObject:launchBundleId forKey:@"selected"];
+        [lcUserDefaults setObject:containerFolderName forKey:@"selectedContainer"];'''
+    new = '''        [lcUserDefaults setObject:launchBundleId forKey:@"selected"];
+        [lcUserDefaults setObject:containerFolderName forKey:@"selectedContainer"];
+        // TREENB_URL_LAUNCH_TS: guest 前台点小组件切换 App 走这条路，必须写新鲜度
+        // 标记，否则重启后 TreeNB 冷启动接管门禁(ts<=0)会放弃 → 停在 openSSS。
+        [lcUserDefaults setObject:@([[NSDate date] timeIntervalSince1970]) forKey:@"TNBGuestLaunchIntentTS"];
+        [lcUserDefaults setBool:NO forKey:@"LCOpenSideStore"];'''
+    if old not in s:
+        sys.stderr.write('  LCSharedUtils.m: 未找到 URL 启动 selected 锚点，跳过（请人工检查）\n')
+    else:
+        s = s.replace(old, new, 1)
+        open(p, 'w', encoding='utf-8').write(s)
+        print('  LCSharedUtils.m: URL 启动新鲜度标记已注入')
+PY
+fi
+
 # A4b. dyld_bypass_validation.h 里两个函数指针声明缺少 extern，是 C tentative
 #      definition。多个 .m import 后会各自生成一份，xcodegen 工程下触发
 #      "duplicate symbol '_orig_dyld_fcntl' / '_orig_dyld_mmap'"。加 extern 变纯声明。
@@ -387,7 +416,7 @@ a2 = '''        profileNavigationController.tabBarItem = UITabBarItem(
 '''
 tab = '''
         containerNav.tabBarItem = UITabBarItem(
-            title: "容器",
+            title: "🌲树应用",
             image: UIImage(systemName: "shippingbox.fill"),
             tag: 3)
 '''
@@ -675,6 +704,164 @@ PY
   ok "设置 → 高级设置：屏蔽 iOS 更新入口已注入并校验"
 else
   warn "未找到 $SETTINGS，跳过屏蔽更新入口注入"
+fi
+
+# B1f. 「我的」Tab 的「管理」区加入"屏蔽 iOS 更新"入口（用户要的位置）
+# B1e 把它藏在 Settings 的高级设置子页里，真机找不到。用户明确说"设置的管理里"，
+# 对应 ProfileViewController 的 Section.manage（标题 = 管理/MANAGEMENT），
+# 是最显眼、一进"我的"就能看到的位置。ManageRow 是纯代码 enum（非 storyboard），
+# 加 case 后 numberOfRows 自动 +1，只需补 cell configure 与 didSelect 两个 switch。
+PROFILE="$SSS/AltStore/Shell/ProfileViewController.swift"
+if [ -f "$PROFILE" ]; then
+  python3 - "$PROFILE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+orig = s
+changes = []
+
+# 1) enum 加 case（rawValue 自动 = 2）
+a1 = 'private enum ManageRow: Int, CaseIterable { case appearance, storage }'
+n1 = 'private enum ManageRow: Int, CaseIterable { case appearance, storage, osUpdateBlock }'
+if 'case appearance, storage, osUpdateBlock' not in s:
+    if a1 not in s:
+        sys.stderr.write('FATAL[B1f]: ManageRow enum 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a1, n1, 1)
+    changes.append('enum case')
+
+# 2) cell configure：在 case .storage 块后加 case .osUpdateBlock
+a2 = '''            case .storage:
+                cell.configure(
+                    iconSystemName: "externaldrive", iconTint: accent,
+                    title: NSLocalizedString("Storage & Cleanup", comment: ""),
+                    value: storageSizeText)
+            case .none:'''
+n2 = '''            case .storage:
+                cell.configure(
+                    iconSystemName: "externaldrive", iconTint: accent,
+                    title: NSLocalizedString("Storage & Cleanup", comment: ""),
+                    value: storageSizeText)
+            case .osUpdateBlock:
+                cell.configure(
+                    iconSystemName: "shield.slash", iconTint: accent,
+                    title: "屏蔽 iOS 更新")
+            case .none:'''
+if 'case .osUpdateBlock:\n                cell.configure' not in s:
+    if a2 not in s:
+        sys.stderr.write('FATAL[B1f]: manage cell configure 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a2, n2, 1)
+    changes.append('cell configure')
+
+# 3) didSelect：在 manage switch 的 case .storage 后加 case .osUpdateBlock
+a3 = '''            case .storage:
+                navigationController?.pushViewController(StorageViewController(), animated: true)
+            case .none:'''
+n3 = '''            case .storage:
+                navigationController?.pushViewController(StorageViewController(), animated: true)
+            case .osUpdateBlock:
+                let osBlockView = TNBOSUpdateBlockerView()
+                let osNav = UINavigationController(rootViewController: osBlockView)
+                osNav.modalPresentationStyle = .formSheet
+                if #available(iOS 15.0, *) {
+                    osNav.sheetPresentationController?.detents = [.large()]
+                }
+                self.present(osNav, animated: true)
+            case .none:'''
+if 'case .osUpdateBlock:\n                let osBlockView' not in s:
+    if a3 not in s:
+        sys.stderr.write('FATAL[B1f]: manage didSelect 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a3, n3, 1)
+    changes.append('didSelect')
+
+if s != orig:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  ProfileViewController.swift: ' + '；'.join(changes))
+else:
+    print('  ProfileViewController.swift: 管理区屏蔽更新入口已就位（幂等）')
+PY
+  grep -q 'case appearance, storage, osUpdateBlock' "$PROFILE" \
+    && grep -q 'let osBlockView = TNBOSUpdateBlockerView()' "$PROFILE" \
+    || { echo "FATAL[B1f]: 管理区屏蔽更新入口注入不完整" >&2; exit 2; }
+  ok "我的 → 管理：屏蔽 iOS 更新入口已注入并校验"
+else
+  warn "未找到 $PROFILE，跳过管理区屏蔽更新入口注入"
+fi
+
+# B1g. 品牌归一：关于页 openSSS → 🌲TreeNewBee Ⅱ / TreeNB Ⅱ
+# 用户要求：关于里产品名改 TreeNewBee Ⅱ，标题简写 TreeNB Ⅱ，中文用🌲树应用。
+# 直接改 Swift 源码字面量（绕过本地化 key），幂等。
+ABOUT="$SSS/AltStore/Shell/AboutViewController.swift"
+if [ -f "$ABOUT" ]; then
+  python3 - "$ABOUT" "$PROFILE" <<'PY'
+import sys
+about_path, profile_path = sys.argv[1], sys.argv[2]
+
+def patch(path, reps, marker):
+    try:
+        s = open(path, encoding='utf-8').read()
+    except FileNotFoundError:
+        return False
+    o = s
+    for a, b in reps:
+        s = s.replace(a, b)
+    if s != o:
+        open(path, 'w', encoding='utf-8').write(s)
+    return marker in s
+
+patch(about_path, [
+    ('nameLabel.text = "openSSS"', 'nameLabel.text = "🌲TreeNewBee Ⅱ"'),
+    ('title = NSLocalizedString("About openSSS", comment: "")',
+     'title = "关于 TreeNB Ⅱ"'),
+    ('NSLocalizedString("openSSS is free and open-source software (AGPLv3). It is a fork of SideStore, built on AltStore by Riley Testut and the SideStore contributors.", comment: "")',
+     '"🌲树应用（TreeNB Ⅱ）基于 openSSS / LiveContainer 整合，openSSS 遵循 AGPLv3 开源协议。"'),
+], '🌲TreeNewBee Ⅱ')
+
+patch(profile_path, [
+    ('title: NSLocalizedString("About openSSS", comment: ""),',
+     'title: "关于 TreeNB Ⅱ",'),
+], '关于 TreeNB Ⅱ')
+print('  关于页品牌归一：🌲TreeNewBee Ⅱ / TreeNB Ⅱ 已注入（幂等）')
+PY
+  grep -q '🌲TreeNewBee Ⅱ' "$ABOUT" \
+    || { echo "FATAL[B1g]: 关于页品牌归一失败" >&2; exit 2; }
+  ok "关于页品牌归一：🌲TreeNewBee Ⅱ / TreeNB Ⅱ 已校验"
+else
+  warn "未找到 $ABOUT，跳过关于页品牌归一"
+fi
+
+# B1h. 虚拟定位诚实提示：精简单包用的 IDevice release 未编 location_simulation
+# feature（nm 实测 ios-arm64/libidevice_ffi.a 无任何 location_simulation 符号），
+# 故 TreeNB 用 C 空桩让上层不崩。但空桩 set 恒返回"成功"，UI 会误报"模拟已开始"。
+# 这里把 Toast 与 status footer 改成诚实说明，避免用户以为定位真生效。
+LOCVIEW="$SSS/AltStore/Shell/LocationSimulationViewController.swift"
+if [ -f "$LOCVIEW" ]; then
+  python3 - "$LOCVIEW" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+# 成功 Toast → 诚实提示（空桩未真的改坐标）
+s = s.replace(
+    'ToastView(text: NSLocalizedString("Location simulation started", comment: ""),',
+    'ToastView(text: "本机虚拟定位暂不可用（精简版缺少定位驱动）",')
+# status section footer → 说明现状
+s = s.replace(
+    'return NSLocalizedString("The simulated location is delivered by the on-device direct connection (Apple\'s DVT developer service) or by the location-helper on your Mac, and applies system-wide. Stop and restore the real location when you are done.", comment: "")',
+    'return "当前为精简单包，内置定位驱动未编译位置模拟功能，本机虚拟定位暂不可用。可配置 Mac 定位助手地址走局域网方案。"')
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  LocationSimulationViewController.swift: 虚拟定位诚实提示已注入')
+else:
+    print('  LocationSimulationViewController.swift: 提示已就位（幂等）')
+PY
+  grep -q '本机虚拟定位暂不可用' "$LOCVIEW" \
+    || { echo "FATAL[B1h]: 虚拟定位提示注入失败" >&2; exit 2; }
+  ok "虚拟定位诚实提示已校验"
+else
+  warn "未找到 $LOCVIEW，跳过虚拟定位提示"
 fi
 
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）

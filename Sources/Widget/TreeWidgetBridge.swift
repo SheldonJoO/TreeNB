@@ -27,9 +27,13 @@ public struct TNBWidgetAppEntry: Codable, Identifiable {
 
     public var id: String { bundleName + "|" + container }
 
-    /// 深链：主用 openssai://，图标点击直达容器 Tab 启动
+    /// 深链：主用 openssai://，图标点击直达容器 Tab 启动。
+    /// host 必须是 livecontainer-launch —— LiveContainer 的 TweakLoader hook
+    /// (UIKit+GuestHooks.m LCHandleControlAppURL) 只认这个 host 做 App 切换；
+    /// 用 container-launch 会被落到 default 分支静默吞掉（guest 前台时点组件没反应）。
+    /// scheme 用 openssai（= guest 运行时 lcAppUrlScheme，由 TNBHostUrlScheme 注入）。
     public var launchURL: URL? {
-        var c = URLComponents(string: "openssai://container-launch")
+        var c = URLComponents(string: "openssai://livecontainer-launch")
         var items = [URLQueryItem(name: "bundle-name", value: bundleName)]
         if !container.isEmpty {
             items.append(URLQueryItem(name: "container-folder-name", value: container))
