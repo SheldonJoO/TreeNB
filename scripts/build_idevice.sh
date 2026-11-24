@@ -72,11 +72,19 @@ cd "$SRC"
 [ -f ffi/idevice.h ] || die "cbindgen 未生成 ffi/idevice.h"
 cp ffi/idevice.h swift/include/idevice.h
 
+# ---- 3b. 去掉调试符号，压缩体积 ----
+# Rust release 默认带 DWARF（本机实测 388 个 debug_info 段）。静态库只在链接期
+# 需要外部符号（strip -S 保留），调试信息对运行/链接无用。实测 18.18MB → 13.83MB
+# （省 4.3MB / 24%），五个关键符号全部保留；第 5 步会重新硬校验。
+RAW_LIB="target/aarch64-apple-ios/release/libidevice_ffi.a"
+log "strip -S 去除 IDevice 调试符号（体积优化）"
+strip -S "$RAW_LIB"
+
 # ---- 4. 打包单 slice xcframework ----
 rm -rf "$SRC/swift/IDevice.xcframework"
 log "xcodebuild -create-xcframework (ios-arm64 only)"
 xcodebuild -create-xcframework \
-  -library target/aarch64-apple-ios/release/libidevice_ffi.a \
+  -library "$RAW_LIB" \
   -headers swift/include \
   -output swift/IDevice.xcframework
 

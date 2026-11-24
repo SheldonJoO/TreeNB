@@ -262,6 +262,57 @@ if [ -f "$CTVC" ] && grep -q 'title = "容器"' "$CTVC"; then
   exit 1
 fi
 echo "  widget livecontainer-launch + URL 新鲜度 + 免确认 + 管理区入口 + 品牌归一 + 标题去重校验通过"
+
+# ★ 本轮（2026-11-25 细节打磨）硬校验：
+# 1) App 图标：上游 appiconset 必须已被图6覆盖（1024.png 存在 = 铺图标成功）。
+ICON_1024="upstream/openSSS/AltStore/Resources/Icons.xcassets/AppIcon.appiconset/1024.png"
+if [ ! -f "$ICON_1024" ]; then
+  echo "致命错误: 缺少 App 图标 1024.png，A0 铺图标未执行。" >&2
+  exit 1
+fi
+if [ "$(find upstream/openSSS/AltStore/Resources/Icons.xcassets/AppIcon.appiconset -name '*.png' | wc -l | tr -d ' ')" -lt 18 ]; then
+  echo "致命错误: App 图标尺寸不全（<18 个 png），A0 铺图标不完整。" >&2
+  exit 1
+fi
+# 2) Tab 顺序：树应用第一 / 侧载第三，应用页 Tab 改名，guest 退出回落观察器。
+SHELL_SRC="upstream/openSSS/AltStore/Shell/ShellTabBarController.swift"
+if [ -f "$SHELL_SRC" ]; then
+  grep -q 'viewControllers = \[containerNav, locationNavigationController, appsNavigationController, profileNavigationController\]' "$SHELL_SRC" \
+    || { echo "致命错误: Tab 顺序不是树应用第一。" >&2; exit 1; }
+  grep -q 'title: "侧载"' "$SHELL_SRC" \
+    || { echo "致命错误: 应用 Tab 未改名侧载。" >&2; exit 1; }
+  grep -q 'tnbGuestDidExit' "$SHELL_SRC" \
+    || { echo "致命错误: guest 退出回落树应用 Tab 观察器缺失。" >&2; exit 1; }
+fi
+# 3) 品牌：应用页 / 支持入口 → TreeNB Ⅱ。
+APPS_SRC="upstream/openSSS/AltStore/Shell/AppsViewController.swift"
+if [ -f "$APPS_SRC" ] && ! grep -q 'navigationItem.title = "🌲TreeNB Ⅱ"' "$APPS_SRC"; then
+  echo "致命错误: 应用页大标题未改成 TreeNB Ⅱ。" >&2
+  exit 1
+fi
+if [ -f "$PROFILE_SRC" ] && ! grep -q 'title: "支持 TreeNB Ⅱ"' "$PROFILE_SRC"; then
+  echo "致命错误: 支持入口未改成 TreeNB Ⅱ。" >&2
+  exit 1
+fi
+# 4) 容器页：标题 inline（回顶部）+ 小组件图标改星标（与布局切换图标区分）。
+if [ -f "$ROOT_VIEW" ]; then
+  grep -q 'navigationBarTitleDisplayMode(.inline)' "$ROOT_VIEW" \
+    || { echo "致命错误: TreeApps 标题未设 inline，会落在半中位置。" >&2; exit 1; }
+  grep -q 'Image(systemName: "star.fill")' "$ROOT_VIEW" \
+    || { echo "致命错误: 小组件设置图标未改成星标（与布局切换太像）。" >&2; exit 1; }
+fi
+# 5) Widget 图标放大到接近原生主屏（>=58pt），不再用 42pt 小图标。
+if [ -f "$WIDGET_VIEW" ] && ! grep -q 'iconSize: 60' "$WIDGET_VIEW"; then
+  echo "致命错误: widget 图标未放大（缺 iconSize: 60）。" >&2
+  exit 1
+fi
+# 6) IDevice 自编译库已 strip -S（体积优化，符号仍全）。
+IDEF_LIB_LOCAL="upstream/openSSS/local/idevice/swift/IDevice.xcframework/ios-arm64/libidevice_ffi.a"
+if [ -f "$IDEF_LIB_LOCAL" ]; then
+  echo "  IDevice 静态库体积: $(stat -f%z "$IDEF_LIB_LOCAL") bytes（strip 后应 ≈13.8MB）"
+fi
+echo "  图标 + Tab 顺序/命名 + 退出回落 + 品牌 + 标题 inline + 星标图标 + widget 大图标校验通过"
+
 if ! grep -q 'ensureHostLaunchOverrides' "$ENGINE_SRC"; then
   echo "致命错误: 缺少宿主 URL scheme / App Group 覆盖注入，重签后 lcAppUrlScheme/lcAppGroupPath 会拿错导致 guest 闪退。" >&2
   exit 1

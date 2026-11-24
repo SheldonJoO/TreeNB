@@ -20,6 +20,21 @@ ok()   { printf '\033[1;32m[ ok ]\033[0m %s\n' "$*"; }
 [ -d "$LC/LiveContainer" ] || { echo "缺少 $LC，先跑 prepare_dependencies.sh" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
+# A0. App 图标：用 config/AppIcon（用户提供的电路树图）覆盖上游 openSSS 图标。
+# 上游每次都是干净 tarball，所以每轮构建都必须重铺。全套尺寸 + Contents.json
+# 一起复制，尺寸清单与 appiconset 一致（20/29/40/50/57/60/72/76/80/87/100/1024/114/120/144/152/167/180）。
+# ---------------------------------------------------------------------------
+log "A0. 铺 TreeNB App 图标"
+ICONSET="$SSS/AltStore/Resources/Icons.xcassets/AppIcon.appiconset"
+if [ -d "$ROOT/config/AppIcon" ] && [ -d "$ICONSET" ]; then
+  cp "$ROOT/config/AppIcon/"*.png "$ICONSET/"
+  ok "App 图标已铺（$(ls "$ROOT/config/AppIcon/"*.png | wc -l | tr -d ' ') 个尺寸）"
+else
+  echo "FATAL[A0]: 缺少 config/AppIcon 或上游 appiconset，无法铺图标" >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------
 # A. TreeNewBee 侧：删除 openSSS-as-guest 的跳转分支
 # ---------------------------------------------------------------------------
 log "A. 删除 LC 侧的 openSSS 跳转分支"
@@ -444,14 +459,69 @@ if 'containerNav.tabBarItem' not in s:
     changes.append('containerNav tabBarItem')
 
 # 锚点 3：viewControllers 数组加入 containerNav（这就是之前失效的关键行）
+# 用户要求：树应用放第一个 Tab；"应用"改名"侧载"并与树应用交换位置。
+# 顺序：[树应用, 定位, 侧载, 我的]。guest 悬浮键退出会重启进程回宿主，
+# ShellTabBarController 重建时默认 selectedIndex=0，天然落回树应用页。
 a3 = '        viewControllers = [appsNavigationController, locationNavigationController, profileNavigationController]'
-a3new = '        viewControllers = [appsNavigationController, locationNavigationController, containerNav, profileNavigationController]'
+a3new = '        viewControllers = [containerNav, locationNavigationController, appsNavigationController, profileNavigationController]'
 if a3new not in s:
     if a3 not in s:
         sys.stderr.write('FATAL[B1]: viewControllers 锚点未找到\n')
         sys.exit(2)
     s = s.replace(a3, a3new, 1)
-    changes.append('viewControllers += containerNav')
+    changes.append('viewControllers: 树应用第一 / 侧载第三')
+
+# 锚点 3b："应用" Tab 改名"侧载"
+a_apps_title = '            title: NSLocalizedString("Apps", comment: ""),'
+if a_apps_title in s:
+    s = s.replace(a_apps_title, '            title: "侧载",', 1)
+    changes.append('Apps Tab → 侧载')
+
+# 锚点 3c：深链切 Tab 的索引随新顺序调整
+# importAppDeepLink 原 selectTab(0) 指向"应用"，现"应用"是 index 2；
+# openErrorLog 原 selectTab(2) 指向"我的"，现"我的"是 index 3。
+s = s.replace('''    @objc private func importAppDeepLink(_ notification: Notification)
+    {
+        selectTab(0)''', '''    @objc private func importAppDeepLink(_ notification: Notification)
+    {
+        selectTab(2) // TreeNB: 侧载页现在是 index 2''', 1)
+s = s.replace('''    @objc private func openErrorLog(_ notification: Notification)
+    {
+        selectTab(2)''', '''    @objc private func openErrorLog(_ notification: Notification)
+    {
+        selectTab(3) // TreeNB: 我的页现在是 index 3''', 1)
+
+# 锚点 3d：guest 退出/深链时显式切回树应用 Tab（index 0）。
+# 重启回宿主时默认就是 0，但 iOS state restoration 或深链可能改索引，双保险。
+entry_anchor = '''        NotificationCenter.default.addObserver(
+            self, selector: #selector(applyAppearance),
+            name: ShellTheme.appearanceDidChangeNotification, object: nil)
+    }'''
+entry_new = '''        NotificationCenter.default.addObserver(
+            self, selector: #selector(applyAppearance),
+            name: ShellTheme.appearanceDidChangeNotification, object: nil)
+        // TreeNB: guest 悬浮键退出后强制回落第一个 Tab（树应用）。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(tnbGuestDidExit),
+            name: Notification.Name("TNBGuestDidExitNotification"), object: nil)
+        // TreeNB: 小组件深链/导入深链时切回树应用 Tab（index 0）。
+        TNBDeepLinkRouter.installShellObserver(self, containerTabIndex: 0)
+        selectedIndex = 0
+    }
+
+    @objc private func tnbGuestDidExit()
+    {
+        selectedIndex = 0
+        for nav in viewControllers ?? [] {
+            (nav as? UINavigationController)?.popToRootViewController(animated: false)
+        }
+    }'''
+if 'tnbGuestDidExit' not in s:
+    if entry_anchor not in s:
+        sys.stderr.write('FATAL[B1]: guest 退出观察器锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(entry_anchor, entry_new, 1)
+    changes.append('guest 退出回落树应用 Tab')
 
 # 锚点 4：applyTheme 里同步 tintColor（非致命）
 a4 = '        profileNavigationController.navigationBar.tintColor = ShellTheme.accentColor\n'
@@ -465,10 +535,14 @@ if s != orig:
     open(p, 'w', encoding='utf-8').write(s)
 print('  ShellTabBarController.swift: ' + ('；'.join(changes) if changes else '无需改（已幂等）'))
 PY
-  # 构建期铁证校验：viewControllers 行必须含 containerNav，否则直接失败
-  grep -q 'viewControllers = \[appsNavigationController, locationNavigationController, containerNav, profileNavigationController\]' "$SHELL" \
-    || { echo "FATAL[B1]: 容器 Tab 未进入 viewControllers，拒绝继续构建" >&2; exit 2; }
-  ok "ShellTabBarController.swift: 容器 Tab 已挂载并通过校验"
+  # 构建期铁证校验：viewControllers 必须是新顺序（树应用第一 / 侧载第三），否则直接失败
+  grep -q 'viewControllers = \[containerNav, locationNavigationController, appsNavigationController, profileNavigationController\]' "$SHELL" \
+    || { echo "FATAL[B1]: Tab 顺序不是树应用第一，拒绝继续构建" >&2; exit 2; }
+  grep -q 'title: "侧载"' "$SHELL" \
+    || { echo "FATAL[B1]: 应用 Tab 未改名侧载" >&2; exit 2; }
+  grep -q 'tnbGuestDidExit' "$SHELL" \
+    || { echo "FATAL[B1]: guest 退出回落观察器未注入" >&2; exit 2; }
+  ok "ShellTabBarController.swift: Tab 顺序（树应用第一/侧载第三）+ 退出回落已校验"
 else
   echo "FATAL[B1]: 缺少 $SHELL，无法挂载容器 Tab" >&2
   exit 2
@@ -810,10 +884,11 @@ fi
 # 用户要求：关于里产品名改 TreeNewBee Ⅱ，标题简写 TreeNB Ⅱ，中文用🌲树应用。
 # 直接改 Swift 源码字面量（绕过本地化 key），幂等。
 ABOUT="$SSS/AltStore/Shell/AboutViewController.swift"
+APPSVC="$SSS/AltStore/Shell/AppsViewController.swift"
 if [ -f "$ABOUT" ]; then
-  python3 - "$ABOUT" "$PROFILE" <<'PY'
+  python3 - "$ABOUT" "$PROFILE" "$APPSVC" <<'PY'
 import sys
-about_path, profile_path = sys.argv[1], sys.argv[2]
+about_path, profile_path, apps_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
 def patch(path, reps, marker):
     try:
@@ -838,12 +913,26 @@ patch(about_path, [
 patch(profile_path, [
     ('title: NSLocalizedString("About openSSS", comment: ""),',
      'title: "关于 TreeNB Ⅱ",'),
+    # "我的"页帮助与支持区的"支持 openSSS" → TreeNB Ⅱ
+    ('title: NSLocalizedString("Support openSSS", comment: ""))',
+     'title: "支持 TreeNB Ⅱ")'),
+    # 过期提醒通知里的 openSSS 品牌
+    ('content.title = "openSSS"', 'content.title = "TreeNB Ⅱ"'),
 ], '关于 TreeNB Ⅱ')
-print('  关于页品牌归一：🌲TreeNewBee Ⅱ / TreeNB Ⅱ 已注入（幂等）')
+
+# 应用页大标题 "openSSS" → "🌲TreeNB Ⅱ"（用户要求全 App 品牌统一）
+patch(apps_path, [
+    ('navigationItem.title = "openSSS"', 'navigationItem.title = "🌲TreeNB Ⅱ"'),
+], '🌲TreeNB Ⅱ')
+print('  品牌归一：关于页 / 应用页 / 支持入口 → TreeNB Ⅱ 已注入（幂等）')
 PY
   grep -q '🌲TreeNewBee Ⅱ' "$ABOUT" \
     || { echo "FATAL[B1g]: 关于页品牌归一失败" >&2; exit 2; }
-  ok "关于页品牌归一：🌲TreeNewBee Ⅱ / TreeNB Ⅱ 已校验"
+  grep -q 'navigationItem.title = "🌲TreeNB Ⅱ"' "$APPSVC" \
+    || { echo "FATAL[B1g]: 应用页大标题品牌归一失败" >&2; exit 2; }
+  grep -q 'title: "支持 TreeNB Ⅱ"' "$PROFILE" \
+    || { echo "FATAL[B1g]: 支持入口品牌归一失败" >&2; exit 2; }
+  ok "品牌归一：关于页 / 应用页 / 支持入口 → TreeNB Ⅱ 已校验"
 else
   warn "未找到 $ABOUT，跳过关于页品牌归一"
 fi

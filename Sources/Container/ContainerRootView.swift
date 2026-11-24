@@ -42,17 +42,12 @@ struct ContainerRootView: View {
                 }
             }
             .navigationTitle("🌲TreeApps")
-            .navigationBarTitleDisplayMode(.large)
+            // 用户要求标题回到导航栏顶部：large 会让大标题落到内容区半中，inline 才是顶部。
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    #if DEBUG || TNB_SPIKE
-                    NavigationLink {
-                        SpikeResultView()
-                    } label: {
-                        Image(systemName: "flask.fill")
-                    }
-                    .accessibilityLabel("Spike 自检")
-                    #endif
+                // 左侧：布局切换 + 小组件筛选。两者图标刻意选成不同形状
+                // （网格 vs 星标），避免之前 square.grid / rectangle.grid 太像分不清。
+                ToolbarItemGroup(placement: .navigationBarLeading) {
                     SwiftUI.Button {
                         model.toggleLayout()
                     } label: {
@@ -62,9 +57,20 @@ struct ContainerRootView: View {
                     SwiftUI.Button {
                         showWidgetSettings = true
                     } label: {
-                        Image(systemName: "rectangle.grid.2x2")
+                        Image(systemName: "star.fill")
                     }
                     .accessibilityLabel("小组件应用设置")
+                }
+                // 右侧：证书 + 导入（+ 仍留在最右，符合 iOS 习惯）。
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    #if DEBUG || TNB_SPIKE
+                    NavigationLink {
+                        SpikeResultView()
+                    } label: {
+                        Image(systemName: "flask.fill")
+                    }
+                    .accessibilityLabel("Spike 自检")
+                    #endif
                     SwiftUI.Button {
                         showCertificate = true
                     } label: {

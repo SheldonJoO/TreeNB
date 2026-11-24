@@ -93,16 +93,18 @@ struct TreeLaunchWidgetView: View {
             } else {
                 switch family {
                 case .systemSmall:
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 10) {
-                        ForEach(Array(entry.apps.prefix(4))) { AppTile(app: $0) }
+                    // 主屏图标是 60pt；小组件 2 列空间充足，用 60pt 与原生物理尺寸一致。
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 12) {
+                        ForEach(Array(entry.apps.prefix(4))) { AppTile(app: $0, iconSize: 60) }
                     }
                 case .systemMedium:
+                    // 4 列每列约 75pt，60pt 图标仍能完整显示且接近原生大小。
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
-                        ForEach(Array(entry.apps.prefix(8))) { AppTile(app: $0) }
+                        ForEach(Array(entry.apps.prefix(8))) { AppTile(app: $0, iconSize: 58) }
                     }
                 case .systemLarge:
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 16) {
-                        ForEach(entry.apps) { AppTile(app: $0) }
+                        ForEach(entry.apps) { AppTile(app: $0, iconSize: 58) }
                     }
                 case .accessoryCircular:
                     if let app = entry.apps.first {
@@ -152,16 +154,20 @@ struct TreeLaunchWidgetView: View {
 
 private struct AppTile: View {
     let app: TNBWidgetAppEntry
+    /// 图标边长，默认接近 iOS 主屏原生图标（60pt）。圆角按主屏比例 ≈ 22.37% 缩放。
+    var iconSize: CGFloat = 60
     var body: some View {
         LaunchLabel(app: app) { tile }
     }
     private var tile: some View {
         VStack(spacing: 4) {
             if let img = app.image {
-                Image(uiImage: img).resizable().scaledToFit().frame(width: 42, height: 42)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                Image(uiImage: img).resizable().scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
+                    .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2237))
             } else {
-                Image(systemName: "app.fill").resizable().scaledToFit().frame(width: 36, height: 36)
+                Image(systemName: "app.fill").resizable().scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
                     .foregroundStyle(.tint)
             }
             Text(app.name).font(.caption2).lineLimit(1).foregroundStyle(.primary)
