@@ -158,6 +158,33 @@ elif [ ! -f "$APP/Frameworks/ZSign.dylib" ]; then
     echo "  已从 archive 补拷 ZSign.dylib → Frameworks/"
   fi
 fi
+# 同理归位 TweakLoader / TestJITLess：xcodegen embed 的 dylib 落在 App 根目录，
+# 但上游 invokeAppMain 建的 symlink 目标是 App.app/Frameworks/TweakLoader.dylib。
+# 崩溃实证：guest dlopen @loader_path/.../Tweaks/TweakLoader.dylib 失败 → guest 起不来。
+for DYLIB in TweakLoader TestJITLess; do
+  if [ -f "$APP/$DYLIB.dylib" ]; then
+    mkdir -p "$APP/Frameworks"
+    mv -f "$APP/$DYLIB.dylib" "$APP/Frameworks/$DYLIB.dylib"
+    echo "  已移动 $DYLIB.dylib → Frameworks/"
+  elif [ ! -f "$APP/Frameworks/$DYLIB.dylib" ]; then
+    DS_SRC=$(find "$ARCHIVE_PATH" -name "$DYLIB.dylib" -type f 2>/dev/null | head -1)
+    if [ -n "$DS_SRC" ]; then
+      mkdir -p "$APP/Frameworks"
+      cp -f "$DS_SRC" "$APP/Frameworks/$DYLIB.dylib"
+      echo "  已从 archive 补拷 $DYLIB.dylib → Frameworks/"
+    fi
+  fi
+  if [ ! -f "$APP/Frameworks/$DYLIB.dylib" ]; then
+    echo "致命错误: 包内缺少 Frameworks/$DYLIB.dylib！guest 启动 dlopen 会失败（闪回宿主 UI）。请在 project.yml 声明 $DYLIB target 并 embed。" >&2
+    exit 1
+  fi
+done
+# CydiaSubstrate.framework 也要在 Frameworks/（TweakLoader 注入 guest 后 dlopen 它）
+if [ ! -d "$APP/Frameworks/CydiaSubstrate.framework" ]; then
+  echo "致命错误: 包内缺少 Frameworks/CydiaSubstrate.framework！TweakLoader 依赖它。请在 project.yml 用 framework: 依赖 embed。" >&2
+  exit 1
+fi
+
 ZSIGN_DYLIB="$APP/Frameworks/ZSign.dylib"
 if [ ! -f "$ZSIGN_DYLIB" ]; then
   echo "致命错误: 包内缺少 Frameworks/ZSign.dylib！无 JIT 环境 guest 无法签名/启动。请在 project.yml 声明 ZSign target 并 embed。" >&2
