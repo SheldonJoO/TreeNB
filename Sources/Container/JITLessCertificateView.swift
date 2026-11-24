@@ -34,8 +34,8 @@ struct JITLessCertificateView: View {
                         Text(hasCert ? "已配置 JIT-less 证书" : "未配置证书")
                             .font(.headline)
                         Text(hasCert
-                             ? "容器应用启动时会跳过 JIT 检测，用此证书重签后运行。"
-                             : "无 JIT 环境需要导入你侧载用的 p12 证书才能启动应用。")
+                             ? "已内置证书并在首次启动自动导入；容器应用会用此证书重签、跳过 JIT 检测。"
+                             : "本包已内置签名证书，首次启动自动导入；如需更换可在此手动导入。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -71,12 +71,12 @@ struct JITLessCertificateView: View {
             } header: {
                 Text("证书操作")
             } footer: {
-                Text("使用与侧载 TreeNB 相同的开发者证书（.p12 + 密码）。证书仅保存在本机 App 共享存储，不会上传。")
+                Text("内置证书随 App 包分发，仅用于本机 JIT-less 重签；包内含私钥，请勿公开分发此安装包。")
                     .font(.footnote)
             }
 
             Section {
-                Text("1. 用你侧载时导出的 .p12 证书和密码导入。\n2. 导入后点「重签所有应用」让已安装的应用也能无 JIT 启动。\n3. 之后新导入的 IPA 会自动用该证书签名。")
+                Text("1. 本包内置侧载证书，首次启动自动导入并自动重签已安装应用，无需手动操作。\n2. 如需改用其他证书，可在此导入 .p12（无密码留空）→ 点「重签所有应用」。\n3. 之后新导入的 IPA 会自动用当前证书签名。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } header: {

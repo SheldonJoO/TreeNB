@@ -187,6 +187,57 @@ else:
 PY
 fi
 
+# A4e. LCBootstrap.m 建 TweakLoader symlink 时假设 tweakFolder 已存在，但上游
+# 只有 LiveContainerSwiftUIApp（SwiftUI App 入口）会创建它。TreeNB 主壳是
+# openSSS 的 UIKit App，那段 init 从不执行 → symlink() 因父目录不存在静默失败
+# → guest dlopen "@loader_path/../../Tweaks/TweakLoader.dylib" 报 no such file。
+# 另外上游用 fileExistsAtPath 判断断链不可靠，这里改成校验软链目标并强制重建。
+if [ -f "$LC/LiveContainer/LCBootstrap.m" ]; then
+  python3 - "$LC/LiveContainer/LCBootstrap.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TREENB_TWEAKS_FIX' in s:
+    print('  LCBootstrap.m: Tweaks symlink 修复已注入（幂等）')
+else:
+    old = '''    // Update TweakLoader symlink
+    NSString *tweakLoaderPath = [tweakFolder stringByAppendingPathComponent:@"TweakLoader.dylib"];
+    if (![fm fileExistsAtPath:tweakLoaderPath]) {
+        remove(tweakLoaderPath.UTF8String);
+        NSString *bundlePath = NSBundle.mainBundle.bundlePath;
+        if([bundlePath hasSuffix:@"PlugIns/LiveProcess.appex"]) {
+            // traverse back to LiveContainer.app
+            bundlePath = bundlePath.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
+        }
+        NSString *target = [bundlePath stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"];
+        symlink(target.UTF8String, tweakLoaderPath.UTF8String);
+    }'''
+    new = '''    // TREENB_TWEAKS_FIX: 上游只在 LiveContainerSwiftUIApp 的 SwiftUI init 里创建
+    // tweakFolder；TreeNB 主壳是 UIKit App，那段 init 从不执行，symlink() 会因
+    // 父目录不存在静默失败 → guest dlopen TweakLoader.dylib 报 no such file。
+    [fm createDirectoryAtPath:tweakFolder withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *tweakLoaderPath = [tweakFolder stringByAppendingPathComponent:@"TweakLoader.dylib"];
+    {
+        NSString *bundlePath = NSBundle.mainBundle.bundlePath;
+        if([bundlePath hasSuffix:@"PlugIns/LiveProcess.appex"]) {
+            bundlePath = bundlePath.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
+        }
+        NSString *target = [bundlePath stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"];
+        NSString *current = [fm destinationOfSymbolicLinkAtPath:tweakLoaderPath error:nil];
+        if (![current isEqualToString:target] || ![fm fileExistsAtPath:tweakLoaderPath]) {
+            remove(tweakLoaderPath.UTF8String);
+            symlink(target.UTF8String, tweakLoaderPath.UTF8String);
+        }
+    }'''
+    if old not in s:
+        print('  LCBootstrap.m: 未找到 TweakLoader symlink 锚点，跳过（请人工检查）')
+    else:
+        s = s.replace(old, new, 1)
+        open(p, 'w', encoding='utf-8').write(s)
+        print('  LCBootstrap.m: Tweaks 目录/软链自愈已注入')
+PY
+fi
+
 # A4d. LCSharedUtils launchToGuestAppWithClassicMode 重启本 App 时用
 # NSUserDefaults.lcMainBundle.bundleIdentifier。但 lcMainBundle 是 C 全局，
 # 只在 LiveContainerMain / LCRunGuestExtension 里赋值；宿主冷启动调用本方法时

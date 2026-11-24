@@ -129,7 +129,24 @@ if [ -f "$LC_SHARED" ]; then
     exit 1
   fi
 fi
-echo "  guest 冷启动接管链路校验通过（含宿主 scheme/appGroup 覆盖）"
+# A4e：上游 LCBootstrap 必须自己会创建 tweakFolder 并修好断链，否则宿主侧
+# 万一没跑到，guest 依旧报 TweakLoader.dylib no such file。
+if [ -f "$LC_BOOTSTRAP" ]; then
+  if ! grep -q 'TREENB_TWEAKS_FIX' "$LC_BOOTSTRAP"; then
+    echo "致命错误: 上游 LCBootstrap.m 未注入 Tweaks 目录/软链自愈，guest dlopen TweakLoader.dylib 仍会失败。" >&2
+    echo "请确认 patch_upstream.sh 的 A4e 段已执行。" >&2
+    exit 1
+  fi
+fi
+if ! grep -q 'ensureTweakLoaderSymlink' "$ENGINE_SRC"; then
+  echo "致命错误: 宿主缺少 TweakLoader symlink 前置条件保障。" >&2
+  exit 1
+fi
+if ! grep -q 'autoImportBundledCertificateIfNeeded' "$ENGINE_SRC"; then
+  echo "致命错误: 宿主缺少内置 p12 证书自动导入。" >&2
+  exit 1
+fi
+echo "  guest 冷启动接管链路校验通过（含宿主 scheme/appGroup 覆盖 + Tweaks 自愈 + 证书自动导入）"
 
 echo "==> [1.9/4] 校验小组件快照写入链路"
 if ! grep -rq 'TNBWidgetSnapshotWriter' Sources/Container/WidgetSettings.swift 2>/dev/null; then

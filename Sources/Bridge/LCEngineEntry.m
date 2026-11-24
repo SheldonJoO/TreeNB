@@ -151,6 +151,85 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     return instance;
 }
 
+#pragma mark - Guest 运行前置条件（TweakLoader symlink + 证书自动导入）
+
+/// 上游只在 LiveContainerSwiftUIApp（SwiftUI App 入口）里创建 Documents/Tweaks；
+/// TreeNB 主壳是 openSSS 的 UIKit App，那段 SwiftUI init 从不执行，导致
+/// LCBootstrap.m 的 symlink() 因父目录不存在而静默失败 → guest dlopen
+/// "@loader_path/../../Tweaks/TweakLoader.dylib" 报 no such file。
+/// 由宿主在每次冷启动/常规启动时幂等补齐目录与软链。
++ (void)ensureTweakLoaderSymlink {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    if (!docs.length) { return; }
+
+    NSString *target = [[NSBundle mainBundle].bundlePath
+        stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"];
+    if (![fm fileExistsAtPath:target]) {
+        NSLog(@"[TreeNB] 严重：包内缺少 Frameworks/TweakLoader.dylib，guest 无法启动");
+        [[NSUserDefaults standardUserDefaults] setObject:@"包内缺少 TweakLoader.dylib，请重装完整包"
+                                                 forKey:@"TNBLastGuestLaunchError"];
+        return;
+    }
+
+    // guest 的 @loader_path/../../Tweaks 解析到 Documents/Tweaks；
+    // isSharedBundle 分支解析到 App Group/LiveContainer/Tweaks，一并补齐。
+    NSMutableArray<NSString *> *tweakFolders = [NSMutableArray array];
+    [tweakFolders addObject:[docs stringByAppendingPathComponent:@"Tweaks"]];
+    NSURL *groupRoot = [fm containerURLForSecurityApplicationGroupIdentifier:@"group.openssai.app"];
+    if (!groupRoot) { groupRoot = [LCSharedUtils appGroupPath]; }
+    if (groupRoot) {
+        [tweakFolders addObject:[[groupRoot URLByAppendingPathComponent:@"LiveContainer/Tweaks"] path]];
+    }
+
+    for (NSString *folder in tweakFolders) {
+        [fm createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *link = [folder stringByAppendingPathComponent:@"TweakLoader.dylib"];
+        NSString *current = [fm destinationOfSymbolicLinkAtPath:link error:nil];
+        BOOL linkOK = [current isEqualToString:target] && [fm fileExistsAtPath:link];
+        if (!linkOK) {
+            [fm removeItemAtPath:link error:nil];
+            NSError *err = nil;
+            if (![fm createSymbolicLinkAtPath:link withDestinationPath:target error:&err]) {
+                NSLog(@"[TreeNB] TweakLoader symlink 建立失败 %@: %@", link, err.localizedDescription);
+            } else {
+                NSLog(@"[TreeNB] TweakLoader symlink 已建立 -> %@", target);
+            }
+        }
+    }
+}
+
+/// 证书自动导入：打包时把 p12 注入 App bundle（本地注入，不进公开仓库），
+/// 首次启动自动写进上游读取的 LCCertificateData / LCCertificatePassword。
+/// 用户已手动导入过证书时尊重用户选择，不覆盖。
++ (void)autoImportBundledCertificateIfNeeded {
+    if ([self hasJITLessCertificate]) { return; }
+    NSString *path = [[NSBundle mainBundle] pathForResource:@"TreeNBSigningCertificate" ofType:@"p12"];
+    if (!path.length) { return; }
+    NSData *p12 = [NSData dataWithContentsOfFile:path];
+    if (!p12.length) { return; }
+    [self importJITLessCertificate:p12 password:@""];
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"TNBAutoResignPending"];
+    NSLog(@"[TreeNB] 已自动导入内置 JIT-less 证书 (%lu bytes)", (unsigned long)p12.length);
+}
+
+/// 自动导入证书后的首次启动，用该证书把已装 guest 重签一次（异步，不阻塞 UI）。
+- (void)autoResignGuestsIfNeeded {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    if (![d boolForKey:@"TNBAutoResignPending"]) { return; }
+    [d removeObjectForKey:@"TNBAutoResignPending"];
+    NSArray<NSString *> *guests = [self installedGuestBundleNames] ?: @[];
+    if (guests.count == 0) { return; }
+    [LCEngineEntry resignAllGuestsWithCompletion:^(BOOL success, NSString *detail) {
+        NSLog(@"[TreeNB] 自动重签结果: %@ / %@", success ? @"OK" : @"FAIL", detail);
+        if (!success) {
+            [[NSUserDefaults standardUserDefaults]
+                setObject:[NSString stringWithFormat:@"证书自动重签失败：%@", detail]
+                   forKey:@"TNBLastGuestLaunchError"];
+        }
+    }];
+}
+
 #pragma mark - Host launch overrides
 
 // 从宿主 Info.plist 安全取第一个 URL scheme。不能用 KVC 链式下标：
@@ -207,6 +286,12 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
 
     [d synchronize];
     NSLog(@"[TreeNB] host overrides: scheme=%@, appGroupPath=%@", scheme, groupPath);
+
+    // guest 运行时前置条件：补 Documents/Tweaks 目录 + TweakLoader.dylib 软链。
+    // 必须在进入 LiveContainerMain 之前完成，否则 guest 的 dlopen 立即失败。
+    [self ensureTweakLoaderSymlink];
+    // 首次启动自动导入内置 p12，省掉手动导入（无密码证书留空即可）。
+    [self autoImportBundledCertificateIfNeeded];
 }
 
 #pragma mark - Cold launch takeover
@@ -333,6 +418,9 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     self.status = TNBEngineStatusReady;
     NSLog(@"[TreeNB] LC engine bootstrap OK (bundleRoot=%@, groupRoot=%@)",
           self.bundleRoot.path, self.groupBundleRoot.path);
+
+    // 内置证书首次自动导入后，用该证书把已装 guest 重签一次（后台，不阻塞 UI）。
+    [self autoResignGuestsIfNeeded];
     return YES;
 }
 

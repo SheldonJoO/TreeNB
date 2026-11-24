@@ -43,6 +43,17 @@ typedef void (^TNBInstallCompletion)(BOOL success, NSString *_Nullable appBundle
 /// @return YES 表示已交出进程（调用方不应再继续初始化 UI）；NO 表示正常启动宿主。
 + (BOOL)takeOverIfGuestPending;
 
+/// 幂等补齐 guest 运行前置条件：Documents/Tweaks 目录与 TweakLoader.dylib 软链。
+/// 上游只在 LiveContainerSwiftUIApp 的 SwiftUI init 里建这个目录，TreeNB 的 UIKit
+/// 主壳从不执行它，导致 symlink() 静默失败、guest dlopen 报 no such file。
++ (void)ensureTweakLoaderSymlink;
+
+/// 首次启动自动导入 App bundle 内置的 JIT-less p12 证书（若用户尚未手动导入）。
++ (void)autoImportBundledCertificateIfNeeded;
+
+/// 自动导入证书后，用该证书把已装 guest 重签一次（异步，不阻塞 UI）。
+- (void)autoResignGuestsIfNeeded;
+
 /// 引擎是否已就绪
 @property (nonatomic, readonly) TNBEngineStatus status;
 
