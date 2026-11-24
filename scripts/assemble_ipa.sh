@@ -114,6 +114,21 @@ fi
 echo "  小组件快照写入链路校验通过"
 
 echo "==> [1.10/4] 校验 JIT-less 签名链路"
+# 先归位：xcodegen 对 dylib 的 `embed: true` 走 Copy Bundle Resources，产物落在 App
+# 根目录；而 LCUtils 运行时 dlopen 的是 @executable_path/Frameworks/ZSign.dylib。
+# 把根目录的 ZSign.dylib 移到 Frameworks/，两者路径对齐后再校验。
+if [ -f "$APP/ZSign.dylib" ]; then
+  mkdir -p "$APP/Frameworks"
+  mv -f "$APP/ZSign.dylib" "$APP/Frameworks/ZSign.dylib"
+  echo "  已移动 ZSign.dylib → Frameworks/"
+elif [ ! -f "$APP/Frameworks/ZSign.dylib" ]; then
+  ZS_SRC=$(find "$ARCHIVE_PATH" -name 'ZSign.dylib' -type f 2>/dev/null | head -1)
+  if [ -n "$ZS_SRC" ]; then
+    mkdir -p "$APP/Frameworks"
+    cp -f "$ZS_SRC" "$APP/Frameworks/ZSign.dylib"
+    echo "  已从 archive 补拷 ZSign.dylib → Frameworks/"
+  fi
+fi
 ZSIGN_DYLIB="$APP/Frameworks/ZSign.dylib"
 if [ ! -f "$ZSIGN_DYLIB" ]; then
   echo "致命错误: 包内缺少 Frameworks/ZSign.dylib！无 JIT 环境 guest 无法签名/启动。请在 project.yml 声明 ZSign target 并 embed。" >&2
