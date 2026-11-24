@@ -113,6 +113,30 @@ if ! grep -q 'WidgetKit.framework' project.yml; then
 fi
 echo "  小组件快照写入链路校验通过"
 
+echo "==> [1.10/4] 校验 JIT-less 签名链路"
+ZSIGN_DYLIB="$APP/Frameworks/ZSign.dylib"
+if [ ! -f "$ZSIGN_DYLIB" ]; then
+  echo "致命错误: 包内缺少 Frameworks/ZSign.dylib！无 JIT 环境 guest 无法签名/启动。请在 project.yml 声明 ZSign target 并 embed。" >&2
+  exit 1
+fi
+if ! strings "$ZSIGN_DYLIB" | grep -q 'ZSigner'; then
+  echo "致命错误: ZSign.dylib 未导出 ZSigner 类，签名会失败。" >&2
+  exit 1
+fi
+if ! otool -L "$ZSIGN_DYLIB" | grep -q 'OpenSSL.framework/OpenSSL'; then
+  echo "致命错误: ZSign.dylib 未链接 OpenSSL.framework。" >&2
+  exit 1
+fi
+if ! grep -q 'LCCertificateData' "$ENGINE_SRC"; then
+  echo "致命错误: LCEngineEntry.m 缺少 JIT-less 证书导入实现（LCCertificateData）。" >&2
+  exit 1
+fi
+if [ ! -f "Sources/Container/JITLessCertificateView.swift" ]; then
+  echo "致命错误: 缺少 JIT-less 证书管理界面。" >&2
+  exit 1
+fi
+echo "  JIT-less 签名链路校验通过（ZSign.dylib + 证书导入 + UI 均在）"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 

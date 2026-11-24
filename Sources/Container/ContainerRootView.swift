@@ -18,6 +18,7 @@ struct ContainerRootView: View {
     @StateObject private var model = ContainerViewModel()
     @State private var showImporter = false
     @State private var showWidgetSettings = false
+    @State private var showCertificate = false
 
     var body: some View {
         AdaptiveNavigation {
@@ -59,6 +60,12 @@ struct ContainerRootView: View {
                     }
                     .accessibilityLabel("小组件应用设置")
                     SwiftUI.Button {
+                        showCertificate = true
+                    } label: {
+                        Image(systemName: "key.fill")
+                    }
+                    .accessibilityLabel("无 JIT 证书设置")
+                    SwiftUI.Button {
                         showImporter = true
                     } label: {
                         Image(systemName: "plus.circle.fill")
@@ -80,6 +87,16 @@ struct ContainerRootView: View {
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 SwiftUI.Button("完成") { showWidgetSettings = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $showCertificate) {
+                AdaptiveNavigation {
+                    JITLessCertificateView()
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                SwiftUI.Button("完成") { showCertificate = false }
                             }
                         }
                 }

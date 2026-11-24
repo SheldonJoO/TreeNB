@@ -510,27 +510,117 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
 #pragma mark - Sign
 
 - (BOOL)signGuestAtPath:(NSString *)appPath error:(NSError **)error {
-    // 上游 ZSign 本地签名（证书从 Keychain 读）由 LCMachOUtils 提供。
-    // 这里保留扩展点：若上游符号可用则调用，否则返回明确错误而不是静默失败。
-    typedef BOOL (*TNBZSignFn)(const char *appPath, const char *cert, const char *pass);
-    TNBZSignFn zsign = (TNBZSignFn)dlsym(RTLD_DEFAULT, "TNBZSignGuestAtPath");
-    if (zsign) {
-        const char *cert = ""; // TODO: 从 Keychain 读签名证书（复用 openSSS 的 SideSign 证书存储）
-        BOOL ok = zsign(appPath.UTF8String, cert, "");
-        if (!ok && error) {
-            *error = [NSError errorWithDomain:TNBEngineErrorDomain code:8
-                                    userInfo:@{NSLocalizedDescriptionKey:@"ZSign 签名失败"}];
+    // 走上游 LCAppInfo 的 patch + ZSign：它内部检测 certificatePassword，
+    // 有证书就用 ZSign.dylib 里的 ZSigner 对 guest 重签；无证书会明确报错。
+    Class infoClass = NSClassFromString(@"LCAppInfo");
+    id<TNBLCAppInfoBridge> appInfo = infoClass ?
+        [(id<TNBLCAppInfoBridge>)[infoClass alloc] initWithBundlePath:appPath] : nil;
+    if (!appInfo) {
+        if (error) {
+            *error = [NSError errorWithDomain:TNBEngineErrorDomain code:9
+                                    userInfo:@{NSLocalizedDescriptionKey:@"引擎组件缺失（LCAppInfo 不可用）"}];
         }
-        return ok;
+        return NO;
     }
-
-    // Spike 阶段：没有上游 ZSign 时不阻塞流程，明确报告"未签名"状态
-    if (error) {
-        *error = [NSError errorWithDomain:TNBEngineErrorDomain code:9
+    if (![self class].hasJITLessCertificate) {
+        if (error) {
+            *error = [NSError errorWithDomain:TNBEngineErrorDomain code:10
+                                    userInfo:@{NSLocalizedDescriptionKey:
+                                        @"尚未配置 JIT-less 签名证书，请先导入 p12 证书"}];
+        }
+        return NO;
+    }
+    __block BOOL signedOK = NO;
+    __block NSString *signErr = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [appInfo patchExecAndSignIfNeedWithCompletionHandler:^(bool success, NSString *errorInfo) {
+        signedOK = success;
+        signErr = errorInfo;
+        dispatch_semaphore_signal(sem);
+    } progressHandler:^(NSProgress *p) {
+    } forceSign:YES];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(120 * NSEC_PER_SEC)));
+    if (!signedOK && error) {
+        *error = [NSError errorWithDomain:TNBEngineErrorDomain code:8
                                 userInfo:@{NSLocalizedDescriptionKey:
-                                    @"ZSign 符号未找到（Spike 阶段允许跳过，正式包必须接入）"}];
+                                    signErr ?: @"ZSign 签名失败，请检查证书是否过期/有效"}];
     }
-    return NO;
+    return signedOK;
+}
+
+#pragma mark - JITLess 证书管理
+
+// 证书存储位置必须与上游完全对齐：
+//   LCSharedUtils certificatePassword 读 appGroup suite 的 "LCCertificatePassword"
+//   LCUtils certificateData 读 appGroup suite 的 "LCCertificateData"
+// appGroupID 可能因重签拿不到，故 appGroup suite + standard 双写，读时任一命中即可。
+static NSString *const kTNBKeyCertData = @"LCCertificateData";
+static NSString *const kTNBKeyCertPass = @"LCCertificatePassword";
+static NSString *const kTNBKeyCertDate = @"LCCertificateUpdateDate";
+
++ (NSUserDefaults *)tnb_certDefaults {
+    NSString *gid = [LCSharedUtils appGroupID];
+    NSUserDefaults *group = gid.length ? [[NSUserDefaults alloc] initWithSuiteName:gid] : nil;
+    return group ?: NSUserDefaults.standardUserDefaults;
+}
+
++ (BOOL)hasJITLessCertificate {
+    NSData *data = [[self tnb_certDefaults] objectForKey:kTNBKeyCertData];
+    NSString *pass = [LCSharedUtils certificatePassword];
+    if (!pass.length) {
+        pass = [[self tnb_certDefaults] objectForKey:kTNBKeyCertPass];
+    }
+    return data.length > 0 && pass.length > 0;
+}
+
++ (void)importJITLessCertificate:(NSData *)p12Data password:(NSString *)password {
+    NSDate *now = [NSDate date];
+    for (NSUserDefaults *d in @[[self tnb_certDefaults], NSUserDefaults.standardUserDefaults]) {
+        [d setObject:p12Data forKey:kTNBKeyCertData];
+        [d setObject:password forKey:kTNBKeyCertPass];
+        [d setObject:now forKey:kTNBKeyCertDate];
+        // 缓存 appGroupID，供下次冷启动快速定位（对齐上游 LCAppGroupID）
+        NSString *gid = [LCSharedUtils appGroupID];
+        if (gid.length) { [d setObject:gid forKey:@"LCAppGroupID"]; }
+    }
+    [NSUserDefaults.standardUserDefaults synchronize];
+    NSLog(@"[TreeNB] JIT-less 证书已导入 (%lu bytes)", (unsigned long)p12Data.length);
+}
+
++ (void)removeJITLessCertificate {
+    for (NSUserDefaults *d in @[[self tnb_certDefaults], NSUserDefaults.standardUserDefaults]) {
+        [d removeObjectForKey:kTNBKeyCertData];
+        [d removeObjectForKey:kTNBKeyCertPass];
+        [d removeObjectForKey:kTNBKeyCertDate];
+    }
+    [NSUserDefaults.standardUserDefaults synchronize];
+}
+
++ (void)resignAllGuestsWithCompletion:(void (^)(BOOL success, NSString *detail))completion {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        if (![self hasJITLessCertificate]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (completion) { completion(NO, @"尚未配置 JIT-less 证书"); }
+            });
+            return;
+        }
+        LCEngineEntry *engine = [self shared];
+        NSArray<NSString *> *guests = [engine installedGuestBundleNames] ?: @[];
+        __block NSInteger okCount = 0;
+        __block NSMutableArray<NSString *> *failed = [NSMutableArray array];
+        for (NSString *name in guests) {
+            NSURL *appURL = [engine.bundleRoot URLByAppendingPathComponent:name isDirectory:YES];
+            NSError *e = nil;
+            if ([engine signGuestAtPath:appURL.path error:&e]) { okCount++; }
+            else { [failed addObject:name]; }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *detail = [NSString stringWithFormat:@"已重签 %ld/%lu 个应用%@",
+                (long)okCount, (unsigned long)guests.count,
+                failed.count ? [NSString stringWithFormat:@"；失败: %@", [failed componentsJoinedByString:@", "]] : @""];
+            if (completion) { completion(failed.count == 0, detail); }
+        });
+    });
 }
 
 @end

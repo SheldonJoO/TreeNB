@@ -317,6 +317,10 @@ targets:
         embed: true
       - target: LiveContainerSwiftUI
         embed: true
+      # JITLess 签名核心：LCUtils 运行时 dlopen @executable_path/Frameworks/ZSign.dylib
+      # 拿到 ZSigner 类对 guest 重签。缺此 dylib 则"无 JIT 启动"必失败。
+      - target: ZSign
+        embed: true
       # TreeWidget 已并入 AltWidgetExtension，必须显式声明 embed，
       # xcodegen 才会生成 Embed App Extensions 阶段把 .appex 放进 PlugIns/。
       # 只把它写进 scheme 的 Build/Archive entries 只会"编译"扩展，不会嵌入 IPA。
@@ -453,6 +457,46 @@ targets:
       - sdk: IOKit.framework
       - sdk: libarchive.tbd
 
+  # ===== 3b. JITLess 签名核心 ZSign.dylib =====
+  # 上游 LCUtils.loadStoreFrameworksWithError2 运行时
+  #   dlopen("@executable_path/Frameworks/ZSign.dylib") → NSClassFromString(@"ZSigner")
+  # 对 guest 做 ZSign 重签。这是无 JIT 启动的前提（有证书密码时 invokeAppMain 跳过 JIT 检测，
+  # 但 guest 仍需有效签名才能被 dlopen 执行）。
+  # 源码是 ObjC++（.mm）+ C++（.cpp），链接 krzyzanowskim/OpenSSL.xcframework。
+  ZSign:
+    type: com.apple.product-type.library.dynamic
+    platform: iOS
+    sources:
+      - path: upstream/TreeNewBee/ZSign
+        excludes:
+          - '**/*.h'          # 头文件走 HEADER_SEARCH_PATHS，不参与编译
+          - '**/*.hpp'
+    settings:
+      base:
+        PRODUCT_NAME: ZSign
+        PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.ZSign
+        # 产物必须是 ZSign.dylib（不是 libZSign.dylib），否则 dlopen 路径对不上。
+        EXECUTABLE_PREFIX: ''
+        MACH_O_TYPE: mh_dylib
+        IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+        SDKROOT: iphoneos
+        SUPPORTED_PLATFORMS: iphoneos
+        CLANG_CXX_LANGUAGE_STANDARD: c++20
+        GCC_C_LANGUAGE_STANDARD: gnu17
+        # ZSign 的 .cpp/.mm 用 #include "common/xxx.h" 等相对路径，根在 ZSign/。
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/upstream/TreeNewBee/ZSign
+          - $(SRCROOT)/upstream/TreeNewBee/ZSign/common
+        # OpenSSL.xcframework 的 Headers 里是 <openssl/*.h>。
+        FRAMEWORK_SEARCH_PATHS:
+          - $(SRCROOT)/Dependencies
+        SKIP_INSTALL: YES
+    dependencies:
+      # 链接但不 embed：主 App 已通过 openSSS 的 SPM 签名栈把 OpenSSL.framework 放进
+      # Frameworks/，ZSign 运行时从 @rpath 复用它，避免两处 embed 同一 bundle 冲突。
+      - framework: Dependencies/OpenSSL.xcframework
+        embed: false
+
   # ===== 4. Widget extension（openSSS AltWidget + TreeWidget 并入）=====
   AltWidgetExtension:
     type: com.apple.product-type.app-extension
@@ -524,6 +568,7 @@ schemes:
         # 写 [debug, release] 会被 compactMap 过滤成空 → buildFor*=NO → 无 ArchiveAction
         LiveContainerShared: all
         LiveContainerSwiftUI: all
+        ZSign: all
         TreeNB: all
         AltWidgetExtension: all
     run:

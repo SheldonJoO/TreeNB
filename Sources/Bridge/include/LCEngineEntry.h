@@ -81,6 +81,26 @@ typedef void (^TNBInstallCompletion)(BOOL success, NSString *_Nullable appBundle
 /// 本地签名一个已 patch 的 guest（ZSign + 证书来自 Keychain）
 - (BOOL)signGuestAtPath:(NSString *)appPath error:(NSError **)error;
 
+#pragma mark - JITLess 证书管理
+
+/// 是否已配置 JIT-less 签名证书（p12 数据 + 密码都在）。
+/// 配置后客端启动会跳过 JIT 检测，guest 用该证书 ZSign 重签后即可无 JIT 运行。
++ (BOOL)hasJITLessCertificate;
+
+/// 导入 JIT-less 证书。p12 数据与密码写入 App Group 共享存储（与上游 LCUtils 读取位置一致），
+/// 并同时写 standardUserDefaults 兜底。写入后所有已安装 guest 在下次启动时用新证书重签。
+/// @param p12Data  .p12 文件的原始字节
+/// @param password p12 导入密码
++ (void)importJITLessCertificate:(NSData *)p12Data password:(NSString *)password;
+
+/// 移除 JIT-less 证书（回到需要 JIT 的模式）。
++ (void)removeJITLessCertificate;
+
+/// 对已安装但目前签名无效/未签名的 guest 用当前证书强制重签。
+/// 切到 JITLess 模式后调用一次，让之前导入的 app 也能无 JIT 启动。
+/// @param completion 主线程回调，success=是否全部成功，detail=结果描述
++ (void)resignAllGuestsWithCompletion:(void (^)(BOOL success, NSString *detail))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END
