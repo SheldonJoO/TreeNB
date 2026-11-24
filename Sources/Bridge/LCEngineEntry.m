@@ -352,7 +352,22 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         return NO;
     }
 
-    NSLog(@"[TreeNB] 冷启动接管 guest: %@", selected);
+    // ★ 新鲜度门禁：selected 可能是上次 guest 退出后残留的旧值。widget 深链冷启
+    //   时 URL 还没到 SceneDelegate，若在这里直接接管就会误进"上次打开的 App"。
+    //   只认 15 秒内由 launchGuestApp 写入的意图标记；过期则视为残留，清掉并返回 NO，
+    //   让宿主正常启动，等 SceneDelegate 收到深链后由 router 精确写入并重启。
+    id tsObj = [defaults objectForKey:@"TNBGuestLaunchIntentTS"];
+    NSTimeInterval ts = [tsObj isKindOfClass:[NSNumber class]] ? [tsObj doubleValue] : 0;
+    NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - ts;
+    if (ts <= 0 || age > 15) {
+        NSLog(@"[TreeNB] 冷启动放弃残留 selected=%@ (age=%.1fs)，交还宿主等深链", selected, age);
+        [defaults removeObjectForKey:@"selected"];
+        [defaults removeObjectForKey:@"selectedContainer"];
+        [defaults removeObjectForKey:@"TNBGuestLaunchIntentTS"];
+        return NO;
+    }
+
+    NSLog(@"[TreeNB] 冷启动接管 guest: %@ (intent age=%.1fs)", selected, age);
 
     // ★ 严格校验 guest 元数据：LiveContainerMain 找不到 guest 时会 fallback 去
     //   dlopen LiveContainerSwiftUI 的 main() 起它自己的 UI —— 但 TreeNB 的 UI 是
@@ -367,6 +382,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         NSLog(@"[TreeNB] 冷启动接管放弃：guest 元数据缺失 (%@)", appInfoPath);
         [defaults removeObjectForKey:@"selected"];
         [defaults removeObjectForKey:@"selectedContainer"];
+        [defaults removeObjectForKey:@"TNBGuestLaunchIntentTS"];
         return NO;
     }
 
@@ -375,6 +391,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         NSLog(@"[TreeNB] 冷启动接管失败：找不到 LiveContainerMain 符号");
         [defaults removeObjectForKey:@"selected"];
         [defaults removeObjectForKey:@"selectedContainer"];
+        [defaults removeObjectForKey:@"TNBGuestLaunchIntentTS"];
         return NO;
     }
 
@@ -400,6 +417,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     [defaults removeObjectForKey:@"selected"];
     [defaults removeObjectForKey:@"selectedContainer"];
     [defaults removeObjectForKey:@"launchAppUrlScheme"];
+    [defaults removeObjectForKey:@"TNBGuestLaunchIntentTS"];
     return NO;
 }
 
@@ -519,6 +537,12 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         [lcDefaults removeObjectForKey:@"launchAppUrlScheme"];
     }
     [lcDefaults setBool:NO forKey:@"LCOpenSideStore"];
+    // ★ 启动意图新鲜度标记：只有"本次主动发起的启动"才带这个时间戳。
+    //   main.swift 冷启动接管时只认 15 秒内写入的 selected，避免 widget 冷启时
+    //   误用上次残留的 selected 抢先进旧 guest（导致"点组件进错 App"）。
+    //   容器页点 App / router 深链都会走这里写入，重启后标记是新鲜的 → 正常接管。
+    [lcDefaults setObject:@([[NSDate date] timeIntervalSince1970])
+                   forKey:@"TNBGuestLaunchIntentTS"];
     [lcDefaults synchronize];
 
     self.swizzledForGuest = YES;
@@ -553,6 +577,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     [lcDefaults removeObjectForKey:@"selected"];
     [lcDefaults removeObjectForKey:@"selectedContainer"];
     [lcDefaults removeObjectForKey:@"launchAppUrlScheme"];
+    [lcDefaults removeObjectForKey:@"TNBGuestLaunchIntentTS"];
     [lcDefaults setBool:NO forKey:@"LCOpenSideStore"];
     [lcDefaults synchronize];
 

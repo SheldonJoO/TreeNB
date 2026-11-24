@@ -6,10 +6,12 @@
 //      TreeLaunchWidget()
 //  （本文件不含 @main，因为 openSSS 已有唯一 @main AltWidgetBundle）
 //
-//  显示 TreeNB 容器里侧载的 App。点击行为分系统：
-//    · iOS 17+：用 App Intent（TNBLaunchGuestIntent），点击瞬间把目标 bundle 写进
-//      共享 Keychain，再唤醒主 App → main.swift 冷启动消费它直接进 guest，零闪屏且精确。
-//    · iOS 16 及更早：回退到 Link 深链（会先闪一下 openSSS 再重启进 guest）。
+//  显示 TreeNB 容器里侧载的 App。点击统一用 Link 深链（上游 LC 真机验证方案）：
+//    openssai://container-launch?bundle-name=X
+//  系统唤起主 App 后由 SceneDelegate → TNBDeepLinkRouter → launchGuestApp 精确启动
+//  指定 guest。App Intent（Button(intent:)）方案在侧载 widget 上实测点击无响应
+//  （perform 不触发 / OpenURLIntent 被系统拦截），已弃用，仅保留文件不挂到视图上。
+//  冷启动"残留 selected 抢先接管"的问题由引擎侧 TNBGuestLaunchIntentTS 新鲜度门解决。
 //
 
 import SwiftUI
@@ -51,7 +53,7 @@ struct TreeLaunchEntry: TimelineEntry {
     let apps: [TNBWidgetAppEntry]
 }
 
-// MARK: - 点击封装：iOS17 App Intent（零闪屏）/ iOS16 Link 兜底
+// MARK: - 点击封装：Link 深链（所有系统统一，上游真机验证方案）
 
 private struct LaunchLabel<Content: View>: View {
     let app: TNBWidgetAppEntry
@@ -64,12 +66,7 @@ private struct LaunchLabel<Content: View>: View {
 
     var body: some View {
         Group {
-            if #available(iOS 17.0, *) {
-                Button(intent: TNBLaunchGuestIntent(bundleName: app.bundleName)) {
-                    content
-                }
-                .buttonStyle(.plain)
-            } else if let url = app.launchURL {
+            if let url = app.launchURL {
                 Link(destination: url) { content }
             } else {
                 content

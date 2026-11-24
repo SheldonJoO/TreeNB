@@ -174,6 +174,36 @@ if [ -f "$ROOT_VIEW" ]; then
   fi
   echo "  卸载真删 + 宫格/列表切换校验通过"
 fi
+# ★ 本轮（2026-11-24 晚）硬校验：
+# 1) 冷启动新鲜度门：防止 widget 深链冷启误用残留 selected 进旧 App。
+if ! grep -q 'TNBGuestLaunchIntentTS' "$ENGINE_SRC"; then
+  echo "致命错误: 引擎缺少 TNBGuestLaunchIntentTS 新鲜度门，点小组件会进上次残留的 App。" >&2
+  exit 1
+fi
+# 2) 容器页显示名读 Info.plist（中文应用名，不再是英文 bundle id）。
+if [ -f "$ROOT_VIEW" ] && ! grep -q 'CFBundleDisplayName' "$ROOT_VIEW"; then
+  echo "致命错误: ContainerRootView 未读 CFBundleDisplayName，容器 App 名称会显示英文 bundle id。" >&2
+  exit 1
+fi
+# 3) widget 点击回退 Link 深链（App Intent 在侧载 widget 上点击无响应）。
+WIDGET_VIEW="upstream/openSSS/AltWidget/TreeNB/TreeLaunchWidget.swift"
+if [ -f "$WIDGET_VIEW" ] && ! grep -q 'Link(destination:' "$WIDGET_VIEW"; then
+  echo "致命错误: TreeLaunchWidget 未用 Link 深链，点小组件会无响应。" >&2
+  exit 1
+fi
+# 4) Anisette 默认值：本机 Anisette 默认关闭。
+UDALT_SRC="upstream/openSSS/AltStore/Core/Extensions/UserDefaults+AltStore.swift"
+if [ -f "$UDALT_SRC" ] && grep -q '#keyPath(UserDefaults.useOnDeviceAnisette): true' "$UDALT_SRC"; then
+  echo "致命错误: 本机 Anisette 默认仍为 true，应默认关闭。" >&2
+  exit 1
+fi
+# 5) 屏蔽 iOS 更新入口已注入设置页。
+SETTINGS_SRC="upstream/openSSS/AltStore/Settings/SettingsViewController.swift"
+if [ -f "$SETTINGS_SRC" ] && ! grep -q 'TNBOSUpdateBlockerView' "$SETTINGS_SRC"; then
+  echo "致命错误: 设置页未注入屏蔽 iOS 更新入口。" >&2
+  exit 1
+fi
+echo "  新鲜度门 + 中文名 + Link 深链 + Anisette 默认值 + 屏蔽更新入口校验通过"
 if ! grep -q 'ensureHostLaunchOverrides' "$ENGINE_SRC"; then
   echo "致命错误: 缺少宿主 URL scheme / App Group 覆盖注入，重签后 lcAppUrlScheme/lcAppGroupPath 会拿错导致 guest 闪退。" >&2
   exit 1

@@ -488,11 +488,10 @@ import UIKit
 import Foundation
 import LiveContainerShared
 
-// ★ Widget 冷启动直达指定 guest（零闪屏 + 精确）：
-// 点小组件时 App Intent 已把目标 bundle 写进共享 Keychain（pending launch）。
-// 必须在 UIApplicationMain 之前消费它并写进 LC 的 selected 键 —— 这样
-// takeOverIfGuestPending 读到的是"本次点击的目标"，而不是上次残留的旧 guest。
-// 若走普通 Link（无 pending），则回落原逻辑（读 selected，可能有一次重启闪屏）。
+// ★ Widget pending 通道（兼容保留）：若历史上 App Intent 写过 pending，这里消费。
+//   主路径已是 Link 深链（openssai://container-launch?bundle-name=X），点击时不会
+//   写 pending，因此正常走下面的深链 → router 精确启动。takeOverIfGuestPending
+//   内部有 TNBGuestLaunchIntentTS 新鲜度门，残留 selected 不会被误接管。
 if let pending = TNBWidgetStore.consumePendingLaunch(), !pending.bundleName.isEmpty {
     let lcDefaults = UserDefaults.standard
     lcDefaults.set(pending.bundleName, forKey: "selected")
@@ -503,6 +502,7 @@ if let pending = TNBWidgetStore.consumePendingLaunch(), !pending.bundleName.isEm
     }
     lcDefaults.removeObject(forKey: "launchAppUrlScheme")
     lcDefaults.set(false, forKey: "LCOpenSideStore")
+    lcDefaults.set(Date().timeIntervalSince1970, forKey: "TNBGuestLaunchIntentTS")
     NSLog("[TreeNB] main.swift: 消费小组件 pending launch -> %@", pending.bundleName)
 }
 
@@ -512,6 +512,14 @@ if LCEngineEntry.takeOverIfGuestPending() {
 }
 
 // 没有待启动 guest（或 guest 启动失败已清理状态）→ 正常启动 openSSS。
+// ★ 一次性迁移：老设备把 Anisette 默认值切到"本机关闭 + jk 服务器"。
+//   只迁移一次（带标记），不覆盖用户之后手动改过的选择。
+let tnDefaults = UserDefaults.standard
+if !tnDefaults.bool(forKey: "TNBAnisetteDefaultsMigrated") {
+    tnDefaults.set(false, forKey: "useOnDeviceAnisette")
+    tnDefaults.set("https://mac-ani.jkcoxson.com", forKey: "menuAnisetteURL")
+    tnDefaults.set(true, forKey: "TNBAnisetteDefaultsMigrated")
+}
 UIApplicationMain(
     CommandLine.argc,
     CommandLine.unsafeArgv,
@@ -545,6 +553,128 @@ PY
 else
   echo "FATAL[B1b]: 缺少 $APPDELEGATE，无法前移入口" >&2
   exit 2
+fi
+
+# B1d. Anisette 默认值：本机 Anisette 默认关闭，服务器默认 jk 的 mac-ani.jkcoxson.com
+# ---------------------------------------------------------------------------
+# 用户诉求：本机 Anisette 开关默认关闭（用远程服务器），服务器默认选中 jkcoxson。
+# registerDefaults 只对新装生效；已装设备靠 main.swift 里的一次性迁移补上。
+UDALT="$SSS/AltStore/Core/Extensions/UserDefaults+AltStore.swift"
+if [ -f "$UDALT" ]; then
+  python3 - "$UDALT" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+orig = s
+# 1) 本机 Anisette 默认关闭
+s = s.replace('#keyPath(UserDefaults.useOnDeviceAnisette): true,',
+              '#keyPath(UserDefaults.useOnDeviceAnisette): false,')
+# 2) 默认服务器改为 jk 的 mac-ani.jkcoxson.com
+s = s.replace('#keyPath(UserDefaults.menuAnisetteURL): AppConstants.Anisette.Servers.defaultServerURL,',
+              '#keyPath(UserDefaults.menuAnisetteURL): "https://mac-ani.jkcoxson.com",')
+if s != orig:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  UserDefaults+AltStore.swift: Anisette 默认值已改（本机关闭/服务器 jk）')
+else:
+    print('  UserDefaults+AltStore.swift: Anisette 默认值已就位（幂等）')
+PY
+  grep -q '#keyPath(UserDefaults.useOnDeviceAnisette): false' "$UDALT" \
+    || { echo "FATAL[B1d]: 本机 Anisette 默认值未改为 false" >&2; exit 2; }
+  ok "Anisette 默认值：本机 Anisette 默认关闭、服务器默认 jkcoxson，校验通过"
+else
+  warn "未找到 $UDALT，跳过 Anisette 默认值修改"
+fi
+
+# B1e. 设置 → 高级设置：加入"屏蔽 iOS 更新"入口（复用 storyboard section 富余 cell[12]）
+# ---------------------------------------------------------------------------
+SETTINGS="$SSS/AltStore/Settings/SettingsViewController.swift"
+if [ -f "$SETTINGS" ]; then
+  python3 - "$SETTINGS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+orig = s
+changes = []
+
+# 1) enum 加 case（rawValue 自动 = 12，对应 storyboard section[9] cell[12] q7f-PG-mTr）
+a1 = '        case userCustomizations     // row 11 - User Customizations\n'
+if 'case osUpdateBlock' not in s:
+    if a1 not in s:
+        sys.stderr.write('FATAL[B1e]: AdvancedSettingsRow userCustomizations 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a1, a1 + '        case osUpdateBlock          // row 12 - 屏蔽 iOS 更新 (TreeNB)\n', 1)
+    changes.append('enum case')
+
+# 2) allCases 追加 .osUpdateBlock
+a2 = '''                .backupAndRestore,
+                .userCustomizations
+            ])'''
+n2 = '''                .backupAndRestore,
+                .userCustomizations,
+                .osUpdateBlock
+            ])'''
+if '.osUpdateBlock\n            ])' not in s:
+    if a2 not in s:
+        sys.stderr.write('FATAL[B1e]: allCases append 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a2, n2, 1)
+    changes.append('allCases')
+
+# 3) didSelect switch 加分支（在 case .refreshAttempts 前插入）
+a3 = '            case .refreshAttempts: break'
+n3 = '''            case .osUpdateBlock:
+                let osBlockView = TNBOSUpdateBlockerView()
+                let osNav = UINavigationController(rootViewController: osBlockView)
+                osNav.modalPresentationStyle = .formSheet
+                if #available(iOS 15.0, *) {
+                    osNav.sheetPresentationController?.detents = [.large()]
+                }
+                self.present(osNav, animated: true)
+                self.tableView.deselectRow(at: indexPath, animated: true)
+
+            case .refreshAttempts: break'''
+if 'case .osUpdateBlock:' not in s:
+    if a3 not in s:
+        sys.stderr.write('FATAL[B1e]: didSelect refreshAttempts 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a3, n3, 1)
+    changes.append('didSelect')
+
+# 4) cellForRowAt：把 row 12 的标题改成"屏蔽 iOS 更新"（覆盖 storyboard 原标题）
+a4 = '''        let cell = super.tableView(tableView, cellForRowAt: effectiveIndexPath)
+        
+        if Section.allCases[indexPath.section] == .account {'''
+n4 = '''        let cell = super.tableView(tableView, cellForRowAt: effectiveIndexPath)
+
+        // TreeNB: 覆盖富余 cell 的标题为"屏蔽 iOS 更新"
+        if Section.allCases[indexPath.section] == .advancedSettings,
+           indexPath.row < AdvancedSettingsRow.allCases.count,
+           AdvancedSettingsRow.allCases[indexPath.row].rawValue == AdvancedSettingsRow.osUpdateBlock.rawValue {
+            cell.textLabel?.text = "屏蔽 iOS 更新"
+            cell.detailTextLabel?.text = nil
+            cell.imageView?.image = UIImage(systemName: "shield.slash")
+            cell.accessoryType = .disclosureIndicator
+        }
+        
+        if Section.allCases[indexPath.section] == .account {'''
+if 'row == .osUpdateBlock {' not in s:
+    if a4 not in s:
+        sys.stderr.write('FATAL[B1e]: cellForRowAt 锚点未找到\n')
+        sys.exit(2)
+    s = s.replace(a4, n4, 1)
+    changes.append('cellForRow')
+
+if s != orig:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  SettingsViewController.swift: ' + '；'.join(changes))
+else:
+    print('  SettingsViewController.swift: 屏蔽更新入口已就位（幂等）')
+PY
+  grep -q 'case osUpdateBlock' "$SETTINGS" && grep -q 'TNBOSUpdateBlockerView' "$SETTINGS" \
+    || { echo "FATAL[B1e]: 屏蔽更新入口注入不完整" >&2; exit 2; }
+  ok "设置 → 高级设置：屏蔽 iOS 更新入口已注入并校验"
+else
+  warn "未找到 $SETTINGS，跳过屏蔽更新入口注入"
 fi
 
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）

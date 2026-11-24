@@ -237,7 +237,7 @@ private struct GuestRow: View {
     }
 
     private var displayName: String {
-        (bundle as NSString).deletingPathExtension
+        AppNameLoader.name(for: bundle)
     }
 }
 
@@ -274,7 +274,7 @@ private struct GuestTile: View {
     }
 
     private var displayName: String {
-        (bundle as NSString).deletingPathExtension
+        AppNameLoader.name(for: bundle)
     }
 }
 
@@ -356,18 +356,49 @@ private struct IPAImporter: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - 图标加载
+// MARK: - 应用目录 / 显示名解析
 
-private enum IconLoader {
-    static func icon(for bundle: String) async -> UIImage? {
+private enum GuestAppPath {
+    /// guest .app 目录的所有候选位置（Documents 主目录 + App Group 兼容目录）
+    static func candidates(for bundle: String) -> [URL] {
         let fm = FileManager.default
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first
-        let candidates = [
+        return [
             docs?.appendingPathComponent("Applications/\(bundle)"),
             fm.containerURL(forSecurityApplicationGroupIdentifier: "group.openssai.app")?
                 .appendingPathComponent("LiveContainer/Applications/\(bundle)")
         ].compactMap { $0 }
-        for appURL in candidates {
+    }
+
+    static func info(for bundle: String) -> [String: Any]? {
+        for appURL in candidates(for: bundle) {
+            if let info = NSDictionary(contentsOf: appURL.appendingPathComponent("Info.plist"))
+                as? [String: Any] { return info }
+        }
+        return nil
+    }
+}
+
+/// 显示名：优先读 Info.plist 的 CFBundleDisplayName / CFBundleName（中文应用名），
+/// 找不到才退回 .app 目录名（bundle id）—— 与小组件快照的取名规则一致。
+private enum AppNameLoader {
+    static func name(for bundle: String) -> String {
+        let info = GuestAppPath.info(for: bundle)
+        let localized = info?["CFBundleDisplayName"] as? String
+        let bundleName = info?["CFBundleName"] as? String
+        let fallback = (bundle as NSString).deletingPathExtension
+        for candidate in [localized, bundleName] {
+            if let name = candidate, !name.isEmpty { return name }
+        }
+        return fallback
+    }
+}
+
+// MARK: - 图标加载
+
+private enum IconLoader {
+    static func icon(for bundle: String) async -> UIImage? {
+        for appURL in GuestAppPath.candidates(for: bundle) {
             let plist = appURL.appendingPathComponent("Info.plist")
             guard let info = NSDictionary(contentsOf: plist) as? [String: Any] else { continue }
             let iconName: String
