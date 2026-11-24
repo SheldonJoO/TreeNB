@@ -93,17 +93,20 @@ struct TreeLaunchWidgetView: View {
             } else {
                 switch family {
                 case .systemSmall:
-                    // 主屏图标是 60pt；小组件 2 列空间充足，用 60pt 与原生物理尺寸一致。
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 12) {
+                    // 主屏图标是 60pt；2×2 布局用 60pt 与原生物理尺寸一致。
+                    // 行距收紧到 8pt：60 图标 + 2 spacing + 13 文字 ≈ 75pt/tile，
+                    // 2 行 + 8 = 158pt 正好塞满 small widget，避免底部文字被裁。
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 8) {
                         ForEach(Array(entry.apps.prefix(4))) { AppTile(app: $0, iconSize: 60) }
                     }
                 case .systemMedium:
-                    // 4 列每列约 75pt，60pt 图标仍能完整显示且接近原生大小。
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
+                    // 4 列每列约 75pt；58pt 图标 + 2 spacing + 13 文字 ≈ 73pt/tile，
+                    // 2 行 + 8 = 154pt < 158pt，完整显示不裁切。
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
                         ForEach(Array(entry.apps.prefix(8))) { AppTile(app: $0, iconSize: 58) }
                     }
                 case .systemLarge:
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 16) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
                         ForEach(entry.apps) { AppTile(app: $0, iconSize: 58) }
                     }
                 case .accessoryCircular:
@@ -160,7 +163,7 @@ private struct AppTile: View {
         LaunchLabel(app: app) { tile }
     }
     private var tile: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 2) {
             if let img = app.image {
                 Image(uiImage: img).resizable().scaledToFit()
                     .frame(width: iconSize, height: iconSize)
