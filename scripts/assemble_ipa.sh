@@ -212,7 +212,21 @@ if ! otool -l "$APP/$MAIN_EXE" 2>/dev/null | grep -A2 'LC_RPATH' | grep -q '@exe
 fi
 echo "  dyld 链路校验通过（无绝对路径链接 + ZSign @rpath + runpath 完整）"
 
-echo "  JIT-less 签名链路校验通过（ZSign.dylib + 证书导入 + UI 均在）"
+# 无密码 p12 必须能导入：hasJITLessCertificate 不得要求 pass.length>0，
+# 且导入时空密码要存成 @""（非 nil），否则上游 certificatePassword 为 nil → JIT 检查失败。
+if grep -q 'return data.length > 0 && pass.length > 0' "$ENGINE_SRC"; then
+  echo "致命错误: hasJITLessCertificate 仍要求密码非空，无密码 p12 会被误判为导入失败。" >&2
+  exit 1
+fi
+if ! grep -q 'password ?: @""' "$ENGINE_SRC"; then
+  echo "致命错误: 导入证书时未把空密码存成 @\"\"，上游会把它当 nil 触发 JIT 检查。" >&2
+  exit 1
+fi
+if ! grep -q 'TNBLastGuestLaunchError' "$ENGINE_SRC"; then
+  echo "致命错误: guest 启动失败原因未透传到 UI，会退化为「点 App 无提示回落主界面」。" >&2
+  exit 1
+fi
+echo "  JIT-less 签名链路校验通过（ZSign.dylib + 证书导入 + 无密码支持 + 错误透传 + UI 均在）"
 
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true

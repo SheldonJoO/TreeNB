@@ -99,7 +99,7 @@ struct JITLessCertificateView: View {
             SwiftUI.Button("取消", role: .cancel) { password = "" }
             SwiftUI.Button("导入") { commitImport() }
         } message: {
-            Text("输入该 .p12 证书导出时设置的密码。")
+            Text("输入该 .p12 证书导出时设置的密码。若证书没有密码（如从侧载工具直接导出的），直接留空点导入即可。")
         }
         .alert("证书操作", isPresented: $showMessage) {
             SwiftUI.Button("好", role: .cancel) {}

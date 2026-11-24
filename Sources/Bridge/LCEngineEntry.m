@@ -263,6 +263,16 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     int result = lcMain(argc, argv);
     NSLog(@"[TreeNB] LiveContainerMain 返回 %d（未交出进程，回落宿主 UI）", result);
 
+    // ★ 透传 guest 启动失败的真实原因到 UI：上游 invokeAppMain 失败时把错误写进
+    //   "error" 键。不读它就会变成"闪一下回主界面却没有任何提示"，无法排障。
+    //   Swift 容器页在 refresh 时读取并展示 TNBLastGuestLaunchError。
+    NSString *guestError = [defaults stringForKey:@"error"];
+    if (guestError.length) {
+        [defaults setObject:guestError forKey:@"TNBLastGuestLaunchError"];
+        [defaults removeObjectForKey:@"error"];
+        NSLog(@"[TreeNB] guest 启动失败原因: %@", guestError);
+    }
+
     [defaults removeObjectForKey:@"selected"];
     [defaults removeObjectForKey:@"selectedContainer"];
     [defaults removeObjectForKey:@"launchAppUrlScheme"];
@@ -632,18 +642,33 @@ static NSString *const kTNBKeyCertDate = @"LCCertificateUpdateDate";
 
 + (BOOL)hasJITLessCertificate {
     NSData *data = [[self tnb_certDefaults] objectForKey:kTNBKeyCertData];
+    if (data.length == 0) {
+        data = [NSUserDefaults.standardUserDefaults objectForKey:kTNBKeyCertData];
+    }
+    // ★ 证书允许无密码：ZSign 的 PKCS12_parse 会先试空密码，且上游 invokeAppMain
+    //   用 `!certificatePassword` 判断——空字符串 @"" 非 nil，能跳过 JIT 检查。
+    //   所以只要密码键存在（哪怕值是 @""）就算已配置，不能要求 pass.length>0，
+    //   否则无密码 p12 导入后会被误判为失败、且"重签所有应用"按钮永远不出现。
     NSString *pass = [LCSharedUtils certificatePassword];
-    if (!pass.length) {
+    if (pass == nil) {
         pass = [[self tnb_certDefaults] objectForKey:kTNBKeyCertPass];
     }
-    return data.length > 0 && pass.length > 0;
+    if (pass == nil) {
+        pass = [NSUserDefaults.standardUserDefaults objectForKey:kTNBKeyCertPass];
+    }
+    return data.length > 0 && pass != nil;
 }
 
 + (void)importJITLessCertificate:(NSData *)p12Data password:(NSString *)password {
     NSDate *now = [NSDate date];
+    // ★ 空密码必须存成 @"\"（非 nil）：上游 LCSharedUtils certificatePassword 直接
+    //   返回该键的值，invokeAppMain 用 `!certificatePassword` 判断是否需要 JIT。
+    //   存 nil/不存会让判断成立 → JIT 检查失败 → guest "闪一下回主界面"。
+    //   ZSign PKCS12_parse 会先尝试空密码，故 @"" 能正确解无密码 p12。
+    NSString *storedPass = password ?: @"";
     for (NSUserDefaults *d in @[[self tnb_certDefaults], NSUserDefaults.standardUserDefaults]) {
         [d setObject:p12Data forKey:kTNBKeyCertData];
-        [d setObject:password forKey:kTNBKeyCertPass];
+        [d setObject:storedPass forKey:kTNBKeyCertPass];
         [d setObject:now forKey:kTNBKeyCertDate];
         // 缓存 appGroupID，供下次冷启动快速定位（对齐上游 LCAppGroupID）
         NSString *gid = [LCSharedUtils appGroupID];

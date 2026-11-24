@@ -29,6 +29,13 @@ final class ContainerViewModel: ObservableObject {
         }
         isBootstrapping = false
         if !ok { lastError = err?.localizedDescription ?? "引擎初始化失败" }
+        // 冷启动接管 guest 失败时，ObjC 侧把上游错误写进 TNBLastGuestLaunchError。
+        // 在这里取出展示并清除，避免"闪一下回主界面却没有任何提示"。
+        if let guestErr = UserDefaults.standard.string(forKey: "TNBLastGuestLaunchError"),
+           !guestErr.isEmpty {
+            lastError = "应用启动失败：\(guestErr)"
+            UserDefaults.standard.removeObject(forKey: "TNBLastGuestLaunchError")
+        }
         await refresh()
     }
 
