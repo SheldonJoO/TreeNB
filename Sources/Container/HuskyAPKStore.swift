@@ -63,7 +63,8 @@ final class HuskyAPKStore: ObservableObject {
         let engine = report.engine ?? "Java"
         let abis = report.abis ?? []
         let libs = report.libraries?.compactMap { $0.name } ?? []
-        let dex = report.dexCount ?? 0
+        // ObjC int 导入 Swift 为 Int32，需显式转换（dexCount 在 wrapper 是 int）。
+        let dex = Int32(report.dexCount ?? 0)
         let supported = HuskyEngine.shared.engineIsSupported(engine, dexCount: dex, abis: abis, libraries: libs)
         let detail = supported
             ? (report.summary ?? engine)
