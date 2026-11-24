@@ -620,7 +620,10 @@ targets:
       base:
         PRODUCT_NAME: AltWidgetExtension
         PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.AltWidgetExtension
-        IPHONEOS_DEPLOYMENT_TARGET: '16.0'   # WidgetKit 门禁 iOS16
+        # TNBLaunchGuestIntent 用 OpenURLIntent 唤醒主 App —— 该 API 在 app extension
+        # 里要求 iOS 18+（App 进程里虽是 iOS 16+）。目标设备 iOS 27，提到 18 即可。
+        # 主 App 部署目标仍是 iOS 15，不受影响；AppIntent 的 iOS17 分支照常可用。
+        IPHONEOS_DEPLOYMENT_TARGET: '18.0'
         SWIFT_VERSION: '5.10'
         # 原工程 Widget 定义了 WIDGET_EXTENSION，源码里大量 #if WIDGET_EXTENSION
         # 分支靠它切换（如 UIColor+AltStore 避开 ThemeManager、Intent 避开主 App 逻辑）。
