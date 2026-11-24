@@ -187,6 +187,34 @@ else:
 PY
 fi
 
+# A4d. LCSharedUtils launchToGuestAppWithClassicMode 重启本 App 时用
+# NSUserDefaults.lcMainBundle.bundleIdentifier。但 lcMainBundle 是 C 全局，
+# 只在 LiveContainerMain / LCRunGuestExtension 里赋值；宿主冷启动调用本方法时
+# 两者都没进过 → lcMainBundle == nil → openApplicationWithBundleIdentifier:nil
+# 内部 initWithContentsOfFile: 抛 NSInvalidArgumentException（2026-11-24 11:05 崩溃）。
+# 改成优先用 [NSBundle mainBundle]（宿主 TreeNB 自己，正是要重启的目标），
+# 保留上游 classicMode / SIGKILL 逻辑不变。
+if [ -f "$LC/LiveContainer/LCSharedUtils.m" ]; then
+  python3 - "$LC/LiveContainer/LCSharedUtils.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TREENB_MAINBUNDLE_FIX' in s:
+    print('  LCSharedUtils.m: mainBundle 兜底已注入（幂等）')
+else:
+    old = '[workspace openApplicationWithBundleIdentifier:NSUserDefaults.lcMainBundle.bundleIdentifier'
+    new = ('// TREENB_MAINBUNDLE_FIX: 宿主冷启动时 lcMainBundle 尚未赋值，用 mainBundle 兜底\n'
+           '    NSString *restartBundleId = NSUserDefaults.lcMainBundle.bundleIdentifier ?: NSBundle.mainBundle.bundleIdentifier;\n'
+           '    [workspace openApplicationWithBundleIdentifier:restartBundleId')
+    if old not in s:
+        print('  LCSharedUtils.m: 未找到重启调用锚点，跳过（请人工检查）')
+    else:
+        s = s.replace(old, new, 1)
+        open(p, 'w', encoding='utf-8').write(s)
+        print('  LCSharedUtils.m: mainBundle nil 兜底已注入')
+PY
+fi
+
 # A4b. dyld_bypass_validation.h 里两个函数指针声明缺少 extern，是 C tentative
 #      definition。多个 .m import 后会各自生成一份，xcodegen 工程下触发
 #      "duplicate symbol '_orig_dyld_fcntl' / '_orig_dyld_mmap'"。加 extern 变纯声明。

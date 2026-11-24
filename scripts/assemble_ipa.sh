@@ -121,6 +121,14 @@ if [ -f "$LC_BOOTSTRAP" ]; then
     exit 1
   fi
 fi
+LC_SHARED="upstream/TreeNewBee/LiveContainer/LCSharedUtils.m"
+if [ -f "$LC_SHARED" ]; then
+  if ! grep -q 'TREENB_MAINBUNDLE_FIX' "$LC_SHARED"; then
+    echo "致命错误: LCSharedUtils.m 缺少 mainBundle nil 兜底，宿主冷启动重启会 initWithContentsOfFile:nil 抛异常。" >&2
+    echo "请确认 patch_upstream.sh 的 A4d 段已执行。" >&2
+    exit 1
+  fi
+fi
 echo "  guest 冷启动接管链路校验通过（含宿主 scheme/appGroup 覆盖）"
 
 echo "==> [1.9/4] 校验小组件快照写入链路"
