@@ -169,7 +169,7 @@ struct WidgetAppSelectionView: View {
                 Text("已安装的容器应用（\(apps.count)）")
             }
             Section {
-                Button {
+                SwiftUI.Button {
                     save()
                 } label: {
                     HStack {
@@ -177,7 +177,7 @@ struct WidgetAppSelectionView: View {
                         Text("保存并刷新小组件")
                     }
                 }
-                Button("恢复自动显示全部") {
+                SwiftUI.Button("恢复自动显示全部") {
                     selected = []
                     TNBWidgetSnapshotWriter.manualSelection = []
                     let n = TNBWidgetSnapshotWriter.refresh()
