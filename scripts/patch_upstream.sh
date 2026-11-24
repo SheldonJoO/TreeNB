@@ -314,6 +314,63 @@ else
   exit 2
 fi
 
+# B1b. AppDelegate：注入 guest 冷启动接管钩子（容器里点 App 的真实启动入口）
+# 原理：上游 LC 启动 guest 是「写 selected 键 → 重启进程 → 冷启动时 main 调
+# LiveContainerMain 接管」。TreeNB 主入口是 openSSS 的 @UIApplicationMain，
+# 没有这个冷启动钩子，导致此前热调 LiveContainerMain 直接闪退。
+# 这里在 didFinishLaunchingWithOptions 最顶部调用 LCEngineEntry.takeOverIfGuestPending()：
+# 有 guest 待启动就把进程交给它（不返回），没有就返回 NO 让 openSSS 正常起。
+APPDELEGATE="$SSS/AltStore/AppDelegate.swift"
+if [ -f "$APPDELEGATE" ]; then
+  python3 - "$APPDELEGATE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+orig = s
+
+# 锚点：didFinishLaunchingWithOptions 的函数头 + 左大括号
+anchor = '''    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool
+    {
+'''
+hook = '''    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool
+    {
+        // TreeNB: guest 冷启动接管。若容器里点过某个 guest，进程在此时把主线权
+        // 交给它（LiveContainerMain → invokeAppMain，正常不返回）；否则返回 NO，
+        // openSSS 照常启动。必须放在所有 UI/日志初始化之前。
+        if LCEngineEntry.takeOverIfGuestPending() {
+            return true
+        }
+'''
+if 'takeOverIfGuestPending' not in s:
+    if anchor not in s:
+        sys.stderr.write('FATAL[B1b]: didFinishLaunchingWithOptions 锚点未找到，上游 AppDelegate 结构已变\n')
+        sys.exit(2)
+    s = s.replace(anchor, hook, 1)
+
+# 确保 import LiveContainerShared（modulemap 已让 Swift 可见）
+if 'LCEngineEntry.takeOverIfGuestPending' in s and 'import LiveContainerShared' not in s:
+    # 插到第一个 import 之后
+    lines = s.splitlines(keepends=True)
+    for i, ln in enumerate(lines):
+        if ln.startswith('import '):
+            lines.insert(i + 1, 'import LiveContainerShared\n')
+            break
+    s = ''.join(lines)
+
+if s != orig:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  AppDelegate.swift: 已注入 guest 冷启动接管钩子')
+else:
+    print('  AppDelegate.swift: 冷启动钩子已存在（幂等）')
+PY
+  grep -q 'takeOverIfGuestPending' "$APPDELEGATE" \
+    || { echo "FATAL[B1b]: 冷启动钩子未注入 AppDelegate，拒绝继续构建" >&2; exit 2; }
+  ok "AppDelegate.swift: guest 冷启动接管钩子已挂载并通过校验"
+else
+  echo "FATAL[B1b]: 缺少 $APPDELEGATE，无法注入冷启动钩子" >&2
+  exit 2
+fi
+
 # B2. Widget bundle 并入 TreeLaunchWidget
 WB="$SSS/AltWidget/AltWidgetBundle.swift"
 if [ -f "$WB" ] && ! grep -q "TreeLaunchWidget" "$WB"; then

@@ -87,6 +87,21 @@ if ! grep -q 'effectiveGroupRoot = groupRoot ?: docs' "$ENGINE_SRC"; then
 fi
 echo "  bootstrap nil 防护校验通过"
 
+echo "==> [1.8/4] 校验 guest 冷启动接管链路"
+if ! grep -q 'takeOverIfGuestPending' "$ENGINE_SRC"; then
+  echo "致命错误: LCEngineEntry.m 缺少冷启动接管钩子实现。" >&2
+  exit 1
+fi
+if ! grep -q 'setObject:bundleName forKey:@"selected"' "$ENGINE_SRC"; then
+  echo "致命错误: launchGuestApp 未写入正确的 selected 键（写成 selectedApp 会导致 guest 永不启动）。" >&2
+  exit 1
+fi
+if ! grep -q 'launchToGuestAppWithClassicMode' "$ENGINE_SRC"; then
+  echo "致命错误: launchGuestApp 未委托 LCSharedUtils 重启进程，热调 LiveContainerMain 会闪退。" >&2
+  exit 1
+fi
+echo "  guest 冷启动接管链路校验通过"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 

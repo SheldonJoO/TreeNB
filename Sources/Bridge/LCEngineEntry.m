@@ -22,10 +22,16 @@
 
 NSErrorDomain const TNBEngineErrorDomain = @"com.openssai.app.LCEngineError";
 
-// 上游 LCSharedUtils.h 暴露的接口（framework 内可见）
+// 上游 LCSharedUtils.h 暴露的接口（framework 内可见）。
+// launchToGuestAppWithClassicMode: 是 guest 启动的正解：它会按是否有 JIT /
+// TrollStore 决定用 LSApplicationWorkspace 重启 App 并 SIGKILL 自己，
+// 重启后由 AppDelegate 冷启动钩子调 LiveContainerMain 接管进程跑 guest。
 @interface LCSharedUtils : NSObject
 + (NSURL *)appGroupPath;
 + (NSString *)appGroupID;
++ (NSString *)certificatePassword;
++ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode;
++ (NSString *)findDefaultContainerWithBundleId:(NSString *)bundleId;
 @end
 
 // 上游 LiveContainerMain(int argc, char *argv[]) —— 通过 dlsym 拿到
@@ -36,6 +42,13 @@ typedef int (*TNBLCMainFn)(int, char **);
 @protocol TNBLCAppInfoBridge <NSObject>
 - (id)initWithBundlePath:(NSString *)bundlePath;
 - (NSString *)bundleIdentifier;
+- (NSString *)dataUUID;
+- (void)setDataUUID:(NSString *)uuid;
+- (void)setRelativeBundlePath:(NSString *)path;
+- (BOOL)is32bit;
+- (BOOL)isJITNeeded;
+- (NSUInteger)defaultClassicMode;
+- (void)save;
 - (void)patchExecAndSignIfNeedWithCompletionHandler:(void (^)(bool success, NSString *errorInfo))completionHandler
                                     progressHandler:(void (^)(NSProgress *progress))progressHandler
                                            forceSign:(BOOL)forceSign;
@@ -138,6 +151,62 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     return instance;
 }
 
+#pragma mark - Cold launch takeover
+
++ (BOOL)takeOverIfGuestPending {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *selected = [defaults stringForKey:@"selected"];
+
+    // 没有待启动 guest：正常的 openSSS 冷启动，直接返回 NO。
+    if (selected.length == 0 || [selected isEqualToString:@"ui"]) {
+        return NO;
+    }
+    // LCOpenSideStore=YES 是 openSSS-as-guest 分支，不属于容器 guest，不接管。
+    if ([defaults boolForKey:@"LCOpenSideStore"]) {
+        return NO;
+    }
+
+    NSLog(@"[TreeNB] 冷启动接管 guest: %@", selected);
+
+    // ★ 严格校验 guest 元数据：LiveContainerMain 找不到 guest 时会 fallback 去
+    //   dlopen LiveContainerSwiftUI 的 main() 起它自己的 UI —— 但 TreeNB 的 UI 是
+    //   openSSS 的 UIKit，二次起 UI 必然乱套。所以只有确认 guest 完整存在才接管。
+    NSArray *docPaths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *docs = docPaths.firstObject;
+    NSString *guestApp = [docs stringByAppendingPathComponent:
+                          [NSString stringWithFormat:@"Applications/%@", selected]];
+    NSString *appInfoPath = [guestApp stringByAppendingPathComponent:@"LCAppInfo.plist"];
+    NSDictionary *guestInfo = [NSDictionary dictionaryWithContentsOfFile:appInfoPath];
+    if (!guestInfo || guestInfo[@"LCDataUUID"] == nil) {
+        NSLog(@"[TreeNB] 冷启动接管放弃：guest 元数据缺失 (%@)", appInfoPath);
+        [defaults removeObjectForKey:@"selected"];
+        [defaults removeObjectForKey:@"selectedContainer"];
+        return NO;
+    }
+
+    TNBLCMainFn lcMain = (TNBLCMainFn)dlsym(RTLD_DEFAULT, "LiveContainerMain");
+    if (!lcMain) {
+        NSLog(@"[TreeNB] 冷启动接管失败：找不到 LiveContainerMain 符号");
+        [defaults removeObjectForKey:@"selected"];
+        [defaults removeObjectForKey:@"selectedContainer"];
+        return NO;
+    }
+
+    // LiveContainerMain 内部读 selected 键走 invokeAppMain。
+    // guest 成功接管时它不会返回（guest 的 UIApplicationMain 接管进程）；
+    // 只有 guest 启动失败才返回非 0，或没有找到 guest 时走到 dlopen SwiftUI main（返回）。
+    // 只要它返回，就说明没能交给 guest —— 清理状态，让宿主正常启动。
+    int argc = 1;
+    char *argv[] = { "TreeNB", NULL };
+    int result = lcMain(argc, argv);
+    NSLog(@"[TreeNB] LiveContainerMain 返回 %d（未交出进程，回落宿主 UI）", result);
+
+    [defaults removeObjectForKey:@"selected"];
+    [defaults removeObjectForKey:@"selectedContainer"];
+    [defaults removeObjectForKey:@"launchAppUrlScheme"];
+    return NO;
+}
+
 #pragma mark - Bootstrap
 
 - (BOOL)bootstrapWithError:(NSError **)error {
@@ -216,47 +285,61 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         return NO;
     }
 
-    // 写入 LC 的选择状态（对应上游 LCBootstrap.m:827 读取的 lcUserDefaults 键）
+    // 读 guest 元数据，拿容器 folderName 和 classicMode。
+    // 上游 LCBootstrap invokeAppMain 强依赖 LCAppInfo.plist 的 LCDataUUID。
+    NSString *dataUUID = containerFolderName;
+    NSUInteger effectiveClassic = classicMode;
+    Class infoClass = NSClassFromString(@"LCAppInfo");
+    id<TNBLCAppInfoBridge> appInfo = infoClass ?
+        [(id<TNBLCAppInfoBridge>)[infoClass alloc] initWithBundlePath:appPath.path] : nil;
+    if (dataUUID.length == 0) {
+        dataUUID = [appInfo dataUUID];
+    }
+    if (dataUUID.length == 0) {
+        dataUUID = [LCSharedUtils findDefaultContainerWithBundleId:bundleName];
+    }
+    if (effectiveClassic == 0) {
+        effectiveClassic = [appInfo defaultClassicMode];
+    }
+    if (dataUUID.length == 0) {
+        dataUUID = bundleName;
+    }
+
+    // ★ 写入 LC 冷启动选择状态。键名必须和上游 LCBootstrap.m:759 完全一致：
+    //   selected / selectedContainer / launchAppUrlScheme / LCOpenSideStore。
     NSUserDefaults *lcDefaults = [NSUserDefaults standardUserDefaults];
-    [lcDefaults setObject:bundleName forKey:@"selectedApp"];
-    if (containerFolderName) {
-        [lcDefaults setObject:containerFolderName forKey:@"selectedContainer"];
-    } else {
-        [lcDefaults removeObjectForKey:@"selectedContainer"];
-    }
+    [lcDefaults setObject:bundleName forKey:@"selected"];
+    [lcDefaults setObject:dataUUID forKey:@"selectedContainer"];
     if (urlStr) {
-        [lcDefaults setObject:urlStr forKey:@"LCLaunchExtensionLaunchURL"];
+        [lcDefaults setObject:urlStr forKey:@"launchAppUrlScheme"];
+    } else {
+        [lcDefaults removeObjectForKey:@"launchAppUrlScheme"];
     }
-    [lcDefaults setBool:NO forKey:@"LCOpenSideStore"];   // ★ 明确关掉 openSSS-as-guest 分支
+    [lcDefaults setBool:NO forKey:@"LCOpenSideStore"];
     [lcDefaults synchronize];
 
-    // 标记已为 guest 安装 swizzle（由下游 LC 代码读取这个标志决定何时装）
     self.swizzledForGuest = YES;
 
-    // ★ 进程接管点：调 LiveContainerMain，它内部 invokeAppMain 把主线权交给 guest。
-    //   在 TreeNB 架构里，openSSS 是主壳，这一步等于"从容器 Tab 全屏打开一个 guest"，
-    //   不是跳到另一个 App，用户返回时回到同一个 App 的 Shell。
-    TNBLCMainFn lcMain = (TNBLCMainFn)dlsym(RTLD_DEFAULT, "LiveContainerMain");
-    if (!lcMain) {
+    // ★ 进程接管：委托上游 LCSharedUtils。它负责：
+    //   1) 判断 JIT/TrollStore/JITLess 路径；
+    //   2) 用 LSApplicationWorkspace 重启本 App，并在 completion 里 SIGKILL 当前进程；
+    //   3) 重启后 AppDelegate 冷启动钩子调 LiveContainerMain → invokeAppMain → guest。
+    // 正常成功时本进程被 SIGKILL，此行之后不会执行。
+    BOOL launched = [LCSharedUtils launchToGuestAppWithClassicMode:effectiveClassic];
+    if (!launched) {
+        // 没触发重启：清理状态，避免下次冷启动误进 guest。
+        [self restoreAfterGuestExit];
         if (error) {
-            *error = [NSError errorWithDomain:TNBEngineErrorDomain code:5
+            *error = [NSError errorWithDomain:TNBEngineErrorDomain code:14
                                     userInfo:@{NSLocalizedDescriptionKey:
-                                        @"找不到 LiveContainerMain 符号（LC 引擎未正确链入）"}];
+                                        @"无法重启进入 guest。请确认已获取 JIT（SideStore/爱思等注入 JIT）"
+                                        @"或已配置 JITLess 证书，然后重试"}];
         }
         return NO;
     }
 
-    int argc = 1;
-    char *argv[] = { "TreeNB", NULL };
-    int result = lcMain(argc, argv);
-    if (result != 0) {
-        if (error) {
-            *error = [NSError errorWithDomain:TNBEngineErrorDomain code:6
-                                    userInfo:@{NSLocalizedDescriptionKey:
-                                        [NSString stringWithFormat:@"guest 启动失败 (code %d)", result]}];
-        }
-        return NO;
-    }
+    // 走到这里说明重启已发出但进程未被立刻杀死（极少数情形）。
+    // 返回 YES，让冷启动接管完成后续；同时不再热调 LiveContainerMain，避免二次初始化崩溃。
     return YES;
 }
 
@@ -264,9 +347,9 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
 
 - (void)restoreAfterGuestExit {
     NSUserDefaults *lcDefaults = [NSUserDefaults standardUserDefaults];
-    [lcDefaults removeObjectForKey:@"selectedApp"];
+    [lcDefaults removeObjectForKey:@"selected"];
     [lcDefaults removeObjectForKey:@"selectedContainer"];
-    [lcDefaults removeObjectForKey:@"LCLaunchExtensionLaunchURL"];
+    [lcDefaults removeObjectForKey:@"launchAppUrlScheme"];
     [lcDefaults setBool:NO forKey:@"LCOpenSideStore"];
     [lcDefaults synchronize];
 
@@ -333,12 +416,13 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
             finish(NO, nil, e); return;
         }
 
-        // 3) 落盘到容器目录。同名冲突时改名，保留旧版本而不是覆盖。
-        NSString *ident = TNBSanitizedBundleName(appInfoPlist[@"CFBundleIdentifier"]);
-        NSString *folderName = [ident stringByAppendingString:@".app"] ?: appName;
+        // 3) 落盘到容器目录。目录名用脱敏 bundle id（也是启动 selected 键的值）。
+        //    同名冲突保留旧版改名，避免覆盖正在用的 guest。
+        NSString *ident = TNBSanitizedBundleName(appInfoPlist[@"CFBundleIdentifier"]) ?: appName;
+        NSString *folderName = [ident hasSuffix:@".app"] ? ident : [ident stringByAppendingString:@".app"];
         NSString *dest = [self.bundleRoot URLByAppendingPathComponent:folderName].path;
         if ([[NSFileManager defaultManager] fileExistsAtPath:dest]) {
-            folderName = [NSString stringWithFormat:@"%@_%ld.app", ident ?: appName, (long)time(NULL)];
+            folderName = [NSString stringWithFormat:@"%@_%ld.app", ident, (long)time(NULL)];
             dest = [self.bundleRoot URLByAppendingPathComponent:folderName].path;
         }
         NSError *moveErr = nil;
@@ -347,20 +431,44 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
             finish(NO, nil, moveErr); return;
         }
 
-        // 4) 调上游 LCAppInfo 做 MachO patch + ZSign（签名失败也会留下未签名 app，与上游行为一致）
+        // 4) 用上游 LCAppInfo 建立完整 guest 元数据 + MachO patch + ZSign。
+        //    这一步是 guest 能否启动的关键：invokeAppMain 强依赖 LCAppInfo.plist
+        //    里的 LCDataUUID / LCOrignalBundleIdentifier / LCPatchRevision。
         if (progress) { progress(@"修补", 0.75); }
         Class infoClass = NSClassFromString(@"LCAppInfo");
         id<TNBLCAppInfoBridge> appInfo = infoClass ?
             [(id<TNBLCAppInfoBridge>)[infoClass alloc] initWithBundlePath:dest] : nil;
         if (!appInfo) {
-            // 极端情况：SwiftUI framework 未加载。app 已落盘，仍算成功，只是未 patch。
-            NSLog(@"[TreeNB] 警告: LCAppInfo 不可用，IPA 已落盘但未 patch/签名");
-            [[NSNotificationCenter defaultCenter] postNotificationName:@"TNBGuestDidExitNotification" object:nil];
-            finish(YES, dest, nil); return;
+            // SwiftUI framework 未加载：报明确错误，不要留下一个永远启动不了的 guest。
+            NSError *e = [NSError errorWithDomain:TNBEngineErrorDomain code:13
+                                        userInfo:@{NSLocalizedDescriptionKey:
+                                            @"引擎组件缺失（LCAppInfo 不可用），无法建立可运行的应用"}];
+            finish(NO, nil, e); return;
         }
+
+        // 4a) 生成 dataUUID（=容器数据目录名）并建好容器骨架。
+        //     上游 LCAppModel 在新建 app 时会做这件事；这里等价补上。
+        NSString *dataUUID = [appInfo dataUUID];
+        if (dataUUID.length == 0) {
+            dataUUID = [NSUUID UUID].UUIDString;
+            [appInfo setDataUUID:dataUUID];
+        }
+        [appInfo setRelativeBundlePath:folderName];
+        [appInfo save];
+
+        NSString *dataRoot = [NSString stringWithFormat:@"%@/Data/Application/%@",
+                              self.bundleRoot.path, dataUUID];
+        for (NSString *sub in @[@"", @"Library/Caches", @"Library/Cookies", @"Documents", @"SystemData", @"tmp"]) {
+            NSString *p = sub.length ? [dataRoot stringByAppendingPathComponent:sub] : dataRoot;
+            [[NSFileManager defaultManager] createDirectoryAtPath:p withIntermediateDirectories:YES
+                                       attributes:nil error:nil];
+        }
+
+        // 4b) patch + 签名。签名失败（如未配置证书/JITLess）不算导入失败——
+        //     app 已落盘且元数据齐全，用户配好 JIT/证书后可再强制签名启动。
         [appInfo patchExecAndSignIfNeedWithCompletionHandler:^(bool success, NSString *errorInfo) {
             if (!success) {
-                NSLog(@"[TreeNB] 警告: patch/签名未完全成功: %@", errorInfo);
+                NSLog(@"[TreeNB] 警告: patch/签名未完全成功: %@（可配置 JIT/证书后重试）", errorInfo);
             }
             if (progress) { progress(@"完成", 1.0); }
             [[NSNotificationCenter defaultCenter] postNotificationName:@"TNBGuestDidExitNotification" object:nil];

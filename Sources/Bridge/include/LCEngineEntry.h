@@ -36,6 +36,13 @@ typedef void (^TNBInstallCompletion)(BOOL success, NSString *_Nullable appBundle
 /// 单例。宿主 AppDelegate 启动后调用 bootstrap 一次。
 + (instancetype)shared;
 
+/// 冷启动接管钩子。必须在 didFinishLaunchingWithOptions 的**最顶部**调用。
+/// 若上次容器点按写入了 guest 选择状态（selected 键），本方法会 dlsym
+/// LiveContainerMain 并把进程主线权交给 guest —— 正常情况下不会返回；
+/// 若 guest 启动失败或没有待启动 guest，则清理状态并返回 NO，App 继续正常启动 openSSS。
+/// @return YES 表示已交出进程（调用方不应再继续初始化 UI）；NO 表示正常启动宿主。
++ (BOOL)takeOverIfGuestPending;
+
 /// 引擎是否已就绪
 @property (nonatomic, readonly) TNBEngineStatus status;
 
