@@ -151,6 +151,42 @@ else:
 PY
 fi
 
+# A4c. LCBootstrap.m 冷启动两个宿主相关全局量允许 TreeNB 覆盖。
+# LiveContainerMain 开头无条件从宿主 Info.plist CFBundleURLTypes[0] 和
+# containerURLForSecurityApplicationGroupIdentifier:appGroupID 现算 lcAppUrlScheme /
+# lcAppGroupPath。单包重签后这两个来源都不可靠：URL scheme 可能被 SideStore/iloder
+# 改写顺序，app group 可能拿不到（appGroupID 退回 @"Unknown" → containerURL 为 nil），
+# 导致 guest 里 NSFileManager+GuestHooks 的 containerURL 崩、setContainerUsingByLC
+# 用错 scheme。改为优先读 TreeNB 宿主在 UserDefaults 写的覆盖键，读不到才走原逻辑。
+if [ -f "$LC/LiveContainer/LCBootstrap.m" ]; then
+  python3 - "$LC/LiveContainer/LCBootstrap.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TREENB_HOST_OVERRIDE' in s:
+    print('  LCBootstrap.m: 宿主覆盖已注入（幂等）')
+else:
+    old_scheme = 'lcAppUrlScheme = NSBundle.mainBundle.infoDictionary[@"CFBundleURLTypes"][0][@"CFBundleURLSchemes"][0];'
+    old_group = 'lcAppGroupPath = [[NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:[NSClassFromString(@"LCSharedUtils") appGroupID]] path];'
+    new_scheme = '''// TREENB_HOST_OVERRIDE: 宿主可在 UserDefaults 注入正确的 URL scheme
+    lcAppUrlScheme = [lcUserDefaults stringForKey:@"TNBHostUrlScheme"];
+    if (!lcAppUrlScheme.length) {
+        lcAppUrlScheme = NSBundle.mainBundle.infoDictionary[@"CFBundleURLTypes"][0][@"CFBundleURLSchemes"][0];
+    }'''
+    new_group = '''// TREENB_HOST_OVERRIDE: 宿主可注入已验证可用的 App Group 容器路径
+    lcAppGroupPath = [lcUserDefaults stringForKey:@"TNBHostAppGroupPath"];
+    if (!lcAppGroupPath.length) {
+        lcAppGroupPath = [[NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:[NSClassFromString(@"LCSharedUtils") appGroupID]] path];
+    }'''
+    if old_scheme not in s or old_group not in s:
+        print('  LCBootstrap.m: 未找到冷启动赋值锚点，跳过覆盖注入（请人工检查）')
+    else:
+        s = s.replace(old_scheme, new_scheme, 1).replace(old_group, new_group, 1)
+        open(p, 'w', encoding='utf-8').write(s)
+        print('  LCBootstrap.m: 宿主 URL scheme / App Group 覆盖已注入')
+PY
+fi
+
 # A4b. dyld_bypass_validation.h 里两个函数指针声明缺少 extern，是 C tentative
 #      definition。多个 .m import 后会各自生成一份，xcodegen 工程下触发
 #      "duplicate symbol '_orig_dyld_fcntl' / '_orig_dyld_mmap'"。加 extern 变纯声明。

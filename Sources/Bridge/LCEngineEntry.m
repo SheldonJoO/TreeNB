@@ -151,9 +151,71 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     return instance;
 }
 
+#pragma mark - Host launch overrides
+
+// 从宿主 Info.plist 安全取第一个 URL scheme。不能用 KVC 链式下标：
+// 重签后 CFBundleURLTypes 可能被改写/为空，链式下标会抛 NSRangeException。
++ (NSString *)hostURLSchemeFromInfo {
+    NSDictionary *info = [NSBundle mainBundle].infoDictionary;
+    NSArray *types = info[@"CFBundleURLTypes"];
+    if (![types isKindOfClass:[NSArray class]]) { return nil; }
+    for (NSDictionary *type in types) {
+        if (![type isKindOfClass:[NSDictionary class]]) { continue; }
+        NSArray *schemes = type[@"CFBundleURLSchemes"];
+        if ([schemes isKindOfClass:[NSArray class]] && schemes.count > 0 &&
+            [schemes.firstObject isKindOfClass:[NSString class]]) {
+            return schemes.firstObject;
+        }
+    }
+    return nil;
+}
+
+// 上游 LiveContainerMain 冷启动瞬间用宿主 Info.plist / App Group 现算
+// lcAppUrlScheme / lcAppGroupPath 两个全局量；单包重签后这两个来源都不可靠
+// （scheme 顺序可变、appGroupID 退回 @"Unknown" → containerURL 为 nil）。
+// patch 后的 LCBootstrap 会优先读下面两个 UserDefaults 覆盖键。
+// 幂等：冷启动接管最顶部与 bootstrap 都调用，保证任何进入 LiveContainerMain
+// 的路径都已备好正确值，且 appGroupPath 绝不为 nil。
++ (void)ensureHostLaunchOverrides {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+
+    NSString *scheme = [self hostURLSchemeFromInfo];
+    // 宿主声明了 openssai / sidestore / livecontainer，优先选我们自己的。
+    for (NSString *candidate in @[ @"openssai", @"sidestore", @"livecontainer" ]) {
+        NSArray *types = [NSBundle mainBundle].infoDictionary[@"CFBundleURLTypes"];
+        for (NSDictionary *type in types ?: @[]) {
+            if ([type isKindOfClass:[NSDictionary class]] &&
+                [(type[@"CFBundleURLSchemes"] ?: @[]) containsObject:candidate]) {
+                scheme = candidate;
+                break;
+            }
+        }
+        if ([scheme isEqualToString:candidate]) { break; }
+    }
+    if (scheme.length) { [d setObject:scheme forKey:@"TNBHostUrlScheme"]; }
+
+    // App Group 容器根：上游要的是根（它自己再拼 LiveContainer/Data/...）。
+    // 已声明 group → LCSharedUtils.appGroupID → Documents 兜底，绝不为 nil。
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSURL *groupRoot = [fm containerURLForSecurityApplicationGroupIdentifier:@"group.openssai.app"];
+    if (!groupRoot) { groupRoot = [LCSharedUtils appGroupPath]; }
+    NSString *groupPath = groupRoot.path;
+    if (!groupPath.length) {
+        groupPath = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    }
+    if (groupPath.length) { [d setObject:groupPath forKey:@"TNBHostAppGroupPath"]; }
+
+    [d synchronize];
+    NSLog(@"[TreeNB] host overrides: scheme=%@, appGroupPath=%@", scheme, groupPath);
+}
+
 #pragma mark - Cold launch takeover
 
 + (BOOL)takeOverIfGuestPending {
+    // ★ 必须在 LiveContainerMain 之前：注入宿主 URL scheme / App Group 覆盖值，
+    //   否则上游现算的 lcAppUrlScheme/lcAppGroupPath 在重签环境里会拿错或为 nil。
+    [self ensureHostLaunchOverrides];
+
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSString *selected = [defaults stringForKey:@"selected"];
 
@@ -249,6 +311,10 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
             return NO;
         }
     }
+
+    // 冷启动与常规启动两条路径都注入宿主 URL scheme / App Group 覆盖值，
+    // 保证上游 LiveContainerMain 现算的 lcAppUrlScheme/lcAppGroupPath 拿正确值。
+    [LCEngineEntry ensureHostLaunchOverrides];
 
     // ★ 关键：不在这里安装任何 UIApplication/NSBundle swizzle。
     //   上游工程的 swizzle 是进程级的，宿主 openSSS 还在跑主循环，提前 swizzle 会打架。

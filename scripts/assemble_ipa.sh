@@ -100,7 +100,28 @@ if ! grep -q 'launchToGuestAppWithClassicMode' "$ENGINE_SRC"; then
   echo "致命错误: launchGuestApp 未委托 LCSharedUtils 重启进程，热调 LiveContainerMain 会闪退。" >&2
   exit 1
 fi
-echo "  guest 冷启动接管链路校验通过"
+if ! grep -q 'ensureHostLaunchOverrides' "$ENGINE_SRC"; then
+  echo "致命错误: 缺少宿主 URL scheme / App Group 覆盖注入，重签后 lcAppUrlScheme/lcAppGroupPath 会拿错导致 guest 闪退。" >&2
+  exit 1
+fi
+if ! grep -q 'TNBHostUrlScheme' "$ENGINE_SRC"; then
+  echo "致命错误: 未写入 TNBHostUrlScheme 覆盖键。" >&2
+  exit 1
+fi
+if ! grep -q 'TNBHostAppGroupPath' "$ENGINE_SRC"; then
+  echo "致命错误: 未写入 TNBHostAppGroupPath 覆盖键。" >&2
+  exit 1
+fi
+# 上游 LCBootstrap 必须已被 patch 成优先读这两个覆盖键，否则写了也没用。
+LC_BOOTSTRAP="upstream/TreeNewBee/LiveContainer/LCBootstrap.m"
+if [ -f "$LC_BOOTSTRAP" ]; then
+  if ! grep -q 'TNBHostUrlScheme' "$LC_BOOTSTRAP" || ! grep -q 'TNBHostAppGroupPath' "$LC_BOOTSTRAP"; then
+    echo "致命错误: 上游 LCBootstrap.m 未注入宿主覆盖读取分支，guest 冷启动仍会拿错 scheme/appGroup。" >&2
+    echo "请确认 patch_upstream.sh 的 A4c 段已执行。" >&2
+    exit 1
+  fi
+fi
+echo "  guest 冷启动接管链路校验通过（含宿主 scheme/appGroup 覆盖）"
 
 echo "==> [1.9/4] 校验小组件快照写入链路"
 if ! grep -rq 'TNBWidgetSnapshotWriter' Sources/Container/WidgetSettings.swift 2>/dev/null; then
