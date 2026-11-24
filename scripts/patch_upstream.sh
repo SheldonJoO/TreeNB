@@ -447,7 +447,7 @@ a2 = '''        profileNavigationController.tabBarItem = UITabBarItem(
 '''
 tab = '''
         containerNav.tabBarItem = UITabBarItem(
-            title: "🌲树应用",
+            title: "树🌲应用",
             image: UIImage(systemName: "shippingbox.fill"),
             tag: 3)
 '''
@@ -474,7 +474,7 @@ if a3new not in s:
 # 锚点 3b："应用" Tab 改名"侧载"
 a_apps_title = '            title: NSLocalizedString("Apps", comment: ""),'
 if a_apps_title in s:
-    s = s.replace(a_apps_title, '            title: "侧载",', 1)
+    s = s.replace(a_apps_title, '            title: "树🌲侧载",', 1)
     changes.append('Apps Tab → 侧载')
 
 # 锚点 3c：深链切 Tab 的索引随新顺序调整
@@ -538,7 +538,7 @@ PY
   # 构建期铁证校验：viewControllers 必须是新顺序（树应用第一 / 侧载第三），否则直接失败
   grep -q 'viewControllers = \[containerNav, locationNavigationController, appsNavigationController, profileNavigationController\]' "$SHELL" \
     || { echo "FATAL[B1]: Tab 顺序不是树应用第一，拒绝继续构建" >&2; exit 2; }
-  grep -q 'title: "侧载"' "$SHELL" \
+  grep -q 'title: "树🌲侧载"' "$SHELL" \
     || { echo "FATAL[B1]: 应用 Tab 未改名侧载" >&2; exit 2; }
   grep -q 'tnbGuestDidExit' "$SHELL" \
     || { echo "FATAL[B1]: guest 退出回落观察器未注入" >&2; exit 2; }

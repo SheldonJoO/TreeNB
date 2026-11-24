@@ -19,6 +19,14 @@ public final class ContainerTabViewController: UIViewController {
     public init() { super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
 
+    // 外层 containerNav 必须是空壳：标题、工具栏都由内层 SwiftUI NavigationStack 提供。
+    // 若外层导航栏可见，状态栏下方会多出一根 44pt 空 bar，表现为标题"没回到顶部"、
+    // 标题与状态栏之间一大块黑空白。每次 appear 都强制隐藏，防止 state restoration 复原。
+    public override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(true, animated: false)
+    }
+
     public override func viewDidLoad() {
         super.viewDidLoad()
         // 标题统一由内嵌 SwiftUI 的 .navigationTitle("🌲TreeApps") 设置。

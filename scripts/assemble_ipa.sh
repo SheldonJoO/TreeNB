@@ -261,7 +261,13 @@ if [ -f "$CTVC" ] && grep -q 'title = "容器"' "$CTVC"; then
   echo "致命错误: 容器页 VC 仍设 title=容器，顶部会出现两个标题。" >&2
   exit 1
 fi
-echo "  widget livecontainer-launch + URL 新鲜度 + 免确认 + 管理区入口 + 品牌归一 + 标题去重校验通过"
+# G) 顶部空白修复：外层 containerNav 必须隐藏导航栏，只留 SwiftUI 那层，
+# 否则状态栏下方多出 44pt 空 bar，标题看着"没回到顶部"。
+if [ -f "$CTVC" ] && ! grep -q 'setNavigationBarHidden(true' "$CTVC"; then
+  echo "致命错误: 容器页未隐藏外层空导航栏，顶部会出现黑空白。" >&2
+  exit 1
+fi
+echo "  widget livecontainer-launch + URL 新鲜度 + 免确认 + 管理区入口 + 品牌归一 + 标题去重 + 顶部空栏隐藏校验通过"
 
 # ★ 本轮（2026-11-25 细节打磨）硬校验：
 # 1) App 图标：上游 appiconset 必须已被图6覆盖（1024.png 存在 = 铺图标成功）。
@@ -279,8 +285,10 @@ SHELL_SRC="upstream/openSSS/AltStore/Shell/ShellTabBarController.swift"
 if [ -f "$SHELL_SRC" ]; then
   grep -q 'viewControllers = \[containerNav, locationNavigationController, appsNavigationController, profileNavigationController\]' "$SHELL_SRC" \
     || { echo "致命错误: Tab 顺序不是树应用第一。" >&2; exit 1; }
-  grep -q 'title: "侧载"' "$SHELL_SRC" \
-    || { echo "致命错误: 应用 Tab 未改名侧载。" >&2; exit 1; }
+  grep -q 'title: "树🌲侧载"' "$SHELL_SRC" \
+    || { echo "致命错误: 应用 Tab 未改名树🌲侧载。" >&2; exit 1; }
+  grep -q 'title: "树🌲应用"' "$SHELL_SRC" \
+    || { echo "致命错误: 容器 Tab 未改名树🌲应用。" >&2; exit 1; }
   grep -q 'tnbGuestDidExit' "$SHELL_SRC" \
     || { echo "致命错误: guest 退出回落树应用 Tab 观察器缺失。" >&2; exit 1; }
 fi
