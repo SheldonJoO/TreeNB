@@ -36,11 +36,14 @@ typedef void (^TNBInstallCompletion)(BOOL success, NSString *_Nullable appBundle
 /// 单例。宿主 AppDelegate 启动后调用 bootstrap 一次。
 + (instancetype)shared;
 
-/// 冷启动接管钩子。必须在 didFinishLaunchingWithOptions 的**最顶部**调用。
+/// 冷启动接管钩子。必须在进程 main.swift 里、宿主 UIApplicationMain **之前**调用。
+/// 绝不能放到 didFinishLaunchingWithOptions —— 那时 UIApplication 单例已创建，
+/// guest 再调一次 UIApplicationMain 会触发 "Dispatch queue already set" 断言闪退。
 /// 若上次容器点按写入了 guest 选择状态（selected 键），本方法会 dlsym
 /// LiveContainerMain 并把进程主线权交给 guest —— 正常情况下不会返回；
-/// 若 guest 启动失败或没有待启动 guest，则清理状态并返回 NO，App 继续正常启动 openSSS。
-/// @return YES 表示已交出进程（调用方不应再继续初始化 UI）；NO 表示正常启动宿主。
+/// 若 guest 启动失败或没有待启动 guest，则清理状态并返回 NO，调用方再启动宿主。
+/// @return YES 表示已交出进程（调用方应直接退出，不得再调 UIApplicationMain）；
+///         NO 表示调用方应正常启动宿主 openSSS。
 + (BOOL)takeOverIfGuestPending;
 
 /// 幂等补齐 guest 运行前置条件：Documents/Tweaks 目录与 TweakLoader.dylib 软链。

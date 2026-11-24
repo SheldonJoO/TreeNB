@@ -92,6 +92,29 @@ if ! grep -q 'takeOverIfGuestPending' "$ENGINE_SRC"; then
   echo "致命错误: LCEngineEntry.m 缺少冷启动接管钩子实现。" >&2
   exit 1
 fi
+# ★ 入口位置硬校验（2026-11-24 真机 .ips 根因）：接管必须在进程 main.swift 里、
+#   宿主 UIApplicationMain 之前。若被放回 didFinishLaunchingWithOptions，
+#   UIApplication 单例已存在，guest 再起 UIApplicationMain 会断言
+#   "Dispatch queue already set" 闪退。同时 AppDelegate 必须移除 @UIApplicationMain
+#   否则与 main.swift 顶层入口重复编译。
+MAIN_ENTRY="upstream/openSSS/AltStore/main.swift"
+if [ ! -f "$MAIN_ENTRY" ]; then
+  echo "致命错误: 缺少 $MAIN_ENTRY —— guest 接管没有前移到进程入口。" >&2
+  exit 1
+fi
+if ! grep -q 'takeOverIfGuestPending' "$MAIN_ENTRY"; then
+  echo "致命错误: main.swift 未调用 takeOverIfGuestPending，guest 冷启动不会接管。" >&2
+  exit 1
+fi
+if grep -q '^@UIApplicationMain' upstream/openSSS/AltStore/AppDelegate.swift 2>/dev/null; then
+  echo "致命错误: AppDelegate.swift 仍带 @UIApplicationMain，与 main.swift 重复入口（编译失败）。" >&2
+  exit 1
+fi
+if grep -q 'LCEngineEntry.takeOverIfGuestPending' upstream/openSSS/AltStore/AppDelegate.swift 2>/dev/null; then
+  echo "致命错误: AppDelegate 里仍有热接管调用（didFinishLaunching 太晚，会二次 UIApplicationMain 闪退）。" >&2
+  exit 1
+fi
+echo "  入口前移校验通过（main.swift 唯一入口，AppDelegate 无 @UIApplicationMain）"
 if ! grep -q 'setObject:bundleName forKey:@"selected"' "$ENGINE_SRC"; then
   echo "致命错误: launchGuestApp 未写入正确的 selected 键（写成 selectedApp 会导致 guest 永不启动）。" >&2
   exit 1

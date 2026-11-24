@@ -429,60 +429,102 @@ else
   exit 2
 fi
 
-# B1b. AppDelegate：注入 guest 冷启动接管钩子（容器里点 App 的真实启动入口）
-# 原理：上游 LC 启动 guest 是「写 selected 键 → 重启进程 → 冷启动时 main 调
-# LiveContainerMain 接管」。TreeNB 主入口是 openSSS 的 @UIApplicationMain，
-# 没有这个冷启动钩子，导致此前热调 LiveContainerMain 直接闪退。
-# 这里在 didFinishLaunchingWithOptions 最顶部调用 LCEngineEntry.takeOverIfGuestPending()：
-# 有 guest 待启动就把进程交给它（不返回），没有就返回 NO 让 openSSS 正常起。
+# B1b. 进程入口前移：把 guest 接管从 didFinishLaunchingWithOptions 移到 main.swift
+# ---------------------------------------------------------------------------
+# 根因（2026-11-24 真机 .ips 确认）：上一版在 didFinishLaunchingWithOptions 里
+# 调 takeOverIfGuestPending，而那时宿主 UIApplicationMain 已创建 UIApplication
+# 单例。guest 的 main() 再调一次 UIApplicationMain →
+# UIApplicationInstantiateSingleton 断言 "assertion failure: Dispatch queue
+# already set" → 点容器 App 闪一下回主界面，永进不去 guest。
+#
+# 正解：对齐上游 LiveContainer 的 main.m —— 进程唯一入口先判断 guest 待启动
+# 状态，有则把进程直接交给 LiveContainerMain（它内部跑 guest 的
+# UIApplicationMain，成为整个进程里唯一一次）；没有才启动宿主 openSSS。
+# 因此必须移除 @UIApplicationMain（否则与 main.swift 重复入口），并删掉旧版
+# 注入在 didFinishLaunching 里的热接管钩子。
 APPDELEGATE="$SSS/AltStore/AppDelegate.swift"
+MAINENTRY="$SSS/AltStore/main.swift"
 if [ -f "$APPDELEGATE" ]; then
-  python3 - "$APPDELEGATE" <<'PY'
+  python3 - "$APPDELEGATE" "$MAINENTRY" <<'PY'
 import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
+app_path, main_path = sys.argv[1], sys.argv[2]
+s = open(app_path, encoding='utf-8').read()
 orig = s
 
-# 锚点：didFinishLaunchingWithOptions 的函数头 + 左大括号
-anchor = '''    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool
-    {
-'''
-hook = '''    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool
-    {
-        // TreeNB: guest 冷启动接管。若容器里点过某个 guest，进程在此时把主线权
+# 1) 移除 @UIApplicationMain —— Swift 不允许它与 main.swift 顶层入口共存。
+s = s.replace('@UIApplicationMain\nfinal class AppDelegate',
+              '// TreeNB: @UIApplicationMain 已移除，进程入口见 main.swift\nfinal class AppDelegate', 1)
+
+# 2) 幂等删除旧版注入在 didFinishLaunching 里的热接管钩子。
+old_hook = '''        // TreeNB: guest 冷启动接管。若容器里点过某个 guest，进程在此时把主线权
         // 交给它（LiveContainerMain → invokeAppMain，正常不返回）；否则返回 NO，
         // openSSS 照常启动。必须放在所有 UI/日志初始化之前。
         if LCEngineEntry.takeOverIfGuestPending() {
             return true
         }
 '''
-if 'takeOverIfGuestPending' not in s:
-    if anchor not in s:
-        sys.stderr.write('FATAL[B1b]: didFinishLaunchingWithOptions 锚点未找到，上游 AppDelegate 结构已变\n')
-        sys.exit(2)
-    s = s.replace(anchor, hook, 1)
-
-# 确保 import LiveContainerShared（modulemap 已让 Swift 可见）
-if 'LCEngineEntry.takeOverIfGuestPending' in s and 'import LiveContainerShared' not in s:
-    # 插到第一个 import 之后
-    lines = s.splitlines(keepends=True)
-    for i, ln in enumerate(lines):
-        if ln.startswith('import '):
-            lines.insert(i + 1, 'import LiveContainerShared\n')
-            break
-    s = ''.join(lines)
+s = s.replace(old_hook, '', 1)
 
 if s != orig:
-    open(p, 'w', encoding='utf-8').write(s)
-    print('  AppDelegate.swift: 已注入 guest 冷启动接管钩子')
+    open(app_path, 'w', encoding='utf-8').write(s)
+    print('  AppDelegate.swift: 已移除 @UIApplicationMain 与旧热接管钩子')
 else:
-    print('  AppDelegate.swift: 冷启动钩子已存在（幂等）')
+    print('  AppDelegate.swift: 入口改动已就位（幂等）')
+
+# 3) 生成 main.swift —— 整个进程唯一入口。
+main_src = '''//
+//  main.swift
+//  TreeNB —— 进程唯一入口
+//
+//  关键：guest 接管判定必须在 UIApplicationMain 之前。
+//  上一版把接管放在 didFinishLaunchingWithOptions，那时宿主 UIApplication 单例
+//  已创建，guest 的 main() 再调一次 UIApplicationMain 触发
+//  "assertion failure: Dispatch queue already set" → 点容器 App 闪一下回主界面。
+//  这里对齐上游 LiveContainer 的 main.m：进程进来先判断，有 guest 就把进程交给
+//  LiveContainerMain（内部跑 guest 的 UIApplicationMain，进程里唯一一次），
+//  没有才启动宿主 openSSS。
+//
+import UIKit
+import LiveContainerShared
+
+if LCEngineEntry.takeOverIfGuestPending() {
+    // guest 已接管进程，正常不会返回到这里。
+    exit(0)
+}
+
+// 没有待启动 guest（或 guest 启动失败已清理状态）→ 正常启动 openSSS。
+UIApplicationMain(
+    CommandLine.argc,
+    CommandLine.unsafeArgv,
+    nil,
+    NSStringFromClass(AppDelegate.self)
+)
+'''
+need_write = False
+try:
+    existing = open(main_path, encoding='utf-8').read()
+except FileNotFoundError:
+    need_write = True
+else:
+    if 'takeOverIfGuestPending' not in existing:
+        need_write = True
+if need_write:
+    open(main_path, 'w', encoding='utf-8').write(main_src)
+    print('  main.swift: 已生成进程唯一入口（guest 接管前移）')
+else:
+    print('  main.swift: 已存在（幂等）')
 PY
-  grep -q 'takeOverIfGuestPending' "$APPDELEGATE" \
-    || { echo "FATAL[B1b]: 冷启动钩子未注入 AppDelegate，拒绝继续构建" >&2; exit 2; }
-  ok "AppDelegate.swift: guest 冷启动接管钩子已挂载并通过校验"
+  # 硬校验：@UIApplicationMain 必须移除（用行首锚点，避免匹配注释）。
+  if grep -q '^@UIApplicationMain' "$APPDELEGATE"; then
+    echo "FATAL[B1b]: AppDelegate.swift 仍残留 @UIApplicationMain，会与 main.swift 重复入口" >&2
+    exit 2
+  fi
+  [ -f "$MAINENTRY" ] || { echo "FATAL[B1b]: main.swift 未生成" >&2; exit 2; }
+  grep -q 'takeOverIfGuestPending' "$MAINENTRY" \
+    || { echo "FATAL[B1b]: main.swift 缺少 guest 接管调用" >&2; exit 2; }
+  ok "进程入口前移：main.swift 唯一 UIApplicationMain + AppDelegate 去注解，校验通过"
 else
-  echo "FATAL[B1b]: 缺少 $APPDELEGATE，无法注入冷启动钩子" >&2
+  echo "FATAL[B1b]: 缺少 $APPDELEGATE，无法前移入口" >&2
   exit 2
 fi
 
