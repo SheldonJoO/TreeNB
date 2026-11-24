@@ -150,6 +150,39 @@ if [ ! -f "Sources/Container/JITLessCertificateView.swift" ]; then
   echo "致命错误: 缺少 JIT-less 证书管理界面。" >&2
   exit 1
 fi
+
+# 2026-11-24 启动闪退事故防回归：ZSign 绝不能被静态链接进主可执行文件。
+# xcodegen 对 `- target: ZSign` 默认 link: true，会把编译机的
+# DYLIB_INSTALL_NAME_BASE=/usr/local/lib 写进主程序 LC_LOAD_DYLIB，
+# 真机 dyld 找不到该绝对路径 → SIGABRT，界面全黑，且发生在任何 UI 之前。
+MAIN_EXE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist")
+BAD_DYLIB=$(otool -L "$APP/$MAIN_EXE" 2>/dev/null | grep -E '/(usr/local|home/|Users/|opt/homebrew)' || true)
+if [ -n "$BAD_DYLIB" ]; then
+  echo "致命错误: 主可执行文件静态链接了编译机绝对路径的动态库，真机启动必闪退：" >&2
+  echo "$BAD_DYLIB" >&2
+  echo "修复：project.yml 主 App 对 ZSign 依赖必须 link: false，且 ZSign 设 DYLIB_INSTALL_NAME_BASE: '@rpath'。" >&2
+  exit 1
+fi
+if otool -L "$APP/$MAIN_EXE" 2>/dev/null | grep -q 'ZSign.dylib'; then
+  echo "致命错误: 主可执行文件仍链接 ZSign.dylib（应为运行时 dlopen，不进 LC_LOAD_DYLIB）。" >&2
+  exit 1
+fi
+# ZSign 自身 install name 也必须是 @rpath，否则被任何 target 链接都会带绝对路径。
+ZSIGN_ID=$(otool -D "$ZSIGN_DYLIB" 2>/dev/null | tail -n +2 | head -1 | tr -d ' ')
+case "$ZSIGN_ID" in
+  @rpath/ZSign.dylib) ;;
+  *)
+    echo "致命错误: ZSign.dylib install name=[$ZSIGN_ID]，应为 @rpath/ZSign.dylib。" >&2
+    exit 1
+    ;;
+esac
+# 主 App runpath 必须包含 @executable_path/Frameworks，dlopen 才能解析 @rpath/OpenSSL。
+if ! otool -l "$APP/$MAIN_EXE" 2>/dev/null | grep -A2 'LC_RPATH' | grep -q '@executable_path/Frameworks'; then
+  echo "致命错误: 主可执行文件缺少 LC_RPATH=@executable_path/Frameworks，ZSign/OpenSSL 无法加载。" >&2
+  exit 1
+fi
+echo "  dyld 链路校验通过（无绝对路径链接 + ZSign @rpath + runpath 完整）"
+
 echo "  JIT-less 签名链路校验通过（ZSign.dylib + 证书导入 + UI 均在）"
 
 echo "==> [2/4] 移除签名残留（无签名包）"

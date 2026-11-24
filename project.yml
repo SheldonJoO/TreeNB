@@ -106,6 +106,12 @@ targets:
     settings:
       base:
         PRODUCT_NAME: TreeNB
+        # dyld 启动期必须能从 App 包内解析 @rpath/* 内嵌库。缺此项时任何
+        # @rpath 为 install name 的内嵌库（ZSign / OpenSSL）都会导致
+        # "Library not loaded ... no such file" → 启动即 SIGABRT，界面全黑/闪退。
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - '@executable_path/Frameworks'
     sources:
       # --- openSSS 本体（主 executable，含 @UIApplicationMain）---
       # 注意：patch_upstream.sh 已把 Sources/Container、Sources/Routing 挂载到
@@ -319,8 +325,13 @@ targets:
         embed: true
       # JITLess 签名核心：LCUtils 运行时 dlopen @executable_path/Frameworks/ZSign.dylib
       # 拿到 ZSigner 类对 guest 重签。缺此 dylib 则"无 JIT 启动"必失败。
+      # link: false 是关键 —— ZSign 只作为资源被 embed，绝不参与主可执行文件的
+      # 静态链接。xcodegen 默认 link: true 会把编译机的 DYLIB_INSTALL_NAME_BASE
+      # (/usr/local/lib) 写进主程序 LC_LOAD_DYLIB，真机 dyld 找不到该路径 →
+      # 启动瞬间 SIGABRT（2026-11-24 事故）。运行期靠 dlopen 绝对路径加载。
       - target: ZSign
         embed: true
+        link: false
       # TreeWidget 已并入 AltWidgetExtension，必须显式声明 embed，
       # xcodegen 才会生成 Embed App Extensions 阶段把 .appex 放进 PlugIns/。
       # 只把它写进 scheme 的 Build/Archive entries 只会"编译"扩展，不会嵌入 IPA。
@@ -478,6 +489,10 @@ targets:
         # 产物必须是 ZSign.dylib（不是 libZSign.dylib），否则 dlopen 路径对不上。
         EXECUTABLE_PREFIX: ''
         MACH_O_TYPE: mh_dylib
+        # 默认 DYLIB_INSTALL_NAME_BASE=/usr/local/lib 会把编译机绝对路径写进
+        # LC_ID_DYLIB；一旦被谁链接就直接带着这个绝对路径去 dyld。改成 @rpath
+        # 让 dylib 自身也用包内相对路径，配合主 App 的 @executable_path/Frameworks。
+        DYLIB_INSTALL_NAME_BASE: '@rpath'
         IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         SDKROOT: iphoneos
         SUPPORTED_PLATFORMS: iphoneos
