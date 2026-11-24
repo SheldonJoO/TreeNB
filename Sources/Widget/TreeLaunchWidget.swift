@@ -6,9 +6,10 @@
 //      TreeLaunchWidget()
 //  （本文件不含 @main，因为 openSSS 已有唯一 @main AltWidgetBundle）
 //
-//  显示 TreeNB 容器里侧载的 App，点击 openssai://container-launch 深链启动。
-//  从上游 TreeWidget.swift (~400 行) 精简：保留 Grid/锁屏样式、Keychain 主通道、
-//  App Group 兜底，去掉诊断面板等调试代码。
+//  显示 TreeNB 容器里侧载的 App。点击行为分系统：
+//    · iOS 17+：用 App Intent（TNBLaunchGuestIntent），点击瞬间把目标 bundle 写进
+//      共享 Keychain，再唤醒主 App → main.swift 冷启动消费它直接进 guest，零闪屏且精确。
+//    · iOS 16 及更早：回退到 Link 深链（会先闪一下 openSSS 再重启进 guest）。
 //
 
 import SwiftUI
@@ -50,6 +51,33 @@ struct TreeLaunchEntry: TimelineEntry {
     let apps: [TNBWidgetAppEntry]
 }
 
+// MARK: - 点击封装：iOS17 App Intent（零闪屏）/ iOS16 Link 兜底
+
+private struct LaunchLabel<Content: View>: View {
+    let app: TNBWidgetAppEntry
+    let content: Content
+
+    init(app: TNBWidgetAppEntry, @ViewBuilder content: () -> Content) {
+        self.app = app
+        self.content = content()
+    }
+
+    var body: some View {
+        Group {
+            if #available(iOS 17.0, *) {
+                Button(intent: TNBLaunchGuestIntent(bundleName: app.bundleName)) {
+                    content
+                }
+                .buttonStyle(.plain)
+            } else if let url = app.launchURL {
+                Link(destination: url) { content }
+            } else {
+                content
+            }
+        }
+    }
+}
+
 // MARK: - Views
 
 struct TreeLaunchWidgetView: View {
@@ -78,8 +106,8 @@ struct TreeLaunchWidgetView: View {
                         ForEach(entry.apps) { AppTile(app: $0) }
                     }
                 case .accessoryCircular:
-                    if let app = entry.apps.first, let url = app.launchURL {
-                        Link(destination: url) {
+                    if let app = entry.apps.first {
+                        LaunchLabel(app: app) {
                             ZStack {
                                 AccessoryWidgetBackground()
                                 if let img = app.image {
@@ -93,16 +121,14 @@ struct TreeLaunchWidgetView: View {
                 case .accessoryRectangular:
                     HStack(spacing: 8) {
                         ForEach(Array(entry.apps.prefix(3))) { app in
-                            if let url = app.launchURL {
-                                Link(destination: url) {
-                                    VStack { appIcon(app); Text(app.name).font(.caption2).lineLimit(1) }
-                                }
+                            LaunchLabel(app: app) {
+                                VStack { appIcon(app); Text(app.name).font(.caption2).lineLimit(1) }
                             }
                         }
                     }
                 case .accessoryInline:
                     if let app = entry.apps.first {
-                        Link(destination: app.launchURL ?? URL(string: "openssai://")!) {
+                        LaunchLabel(app: app) {
                             Label(app.name, systemImage: "tree.fill")
                         }
                     }
@@ -128,11 +154,7 @@ struct TreeLaunchWidgetView: View {
 private struct AppTile: View {
     let app: TNBWidgetAppEntry
     var body: some View {
-        Group {
-            if let url = app.launchURL {
-                Link(destination: url) { tile }
-            } else { tile }
-        }
+        LaunchLabel(app: app) { tile }
     }
     private var tile: some View {
         VStack(spacing: 4) {

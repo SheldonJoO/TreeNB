@@ -488,6 +488,24 @@ import UIKit
 import Foundation
 import LiveContainerShared
 
+// ★ Widget 冷启动直达指定 guest（零闪屏 + 精确）：
+// 点小组件时 App Intent 已把目标 bundle 写进共享 Keychain（pending launch）。
+// 必须在 UIApplicationMain 之前消费它并写进 LC 的 selected 键 —— 这样
+// takeOverIfGuestPending 读到的是"本次点击的目标"，而不是上次残留的旧 guest。
+// 若走普通 Link（无 pending），则回落原逻辑（读 selected，可能有一次重启闪屏）。
+if let pending = TNBWidgetStore.consumePendingLaunch(), !pending.bundleName.isEmpty {
+    let lcDefaults = UserDefaults.standard
+    lcDefaults.set(pending.bundleName, forKey: "selected")
+    if !pending.container.isEmpty {
+        lcDefaults.set(pending.container, forKey: "selectedContainer")
+    } else {
+        lcDefaults.removeObject(forKey: "selectedContainer")
+    }
+    lcDefaults.removeObject(forKey: "launchAppUrlScheme")
+    lcDefaults.set(false, forKey: "LCOpenSideStore")
+    NSLog("[TreeNB] main.swift: 消费小组件 pending launch -> %@", pending.bundleName)
+}
+
 if LCEngineEntry.takeOverIfGuestPending() {
     // guest 已接管进程，正常不会返回到这里。
     exit(0)

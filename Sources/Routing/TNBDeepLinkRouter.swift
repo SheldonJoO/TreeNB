@@ -51,6 +51,27 @@ public final class TNBDeepLinkRouter {
         })
 
         switch host {
+        case "widget-kick":
+            // App Intent（iOS17+）打开主 App 的唤醒 URL。目标 bundle 已由 Intent
+            // 在点击瞬间写进共享 Keychain；冷启动时 main.swift 已消费并接管（不会走到
+            // 这里），能进到这里说明是热启动（App 在后台）——此时在这里消费 pending。
+            if let pending = TNBWidgetStore.consumePendingLaunch(), !pending.bundleName.isEmpty {
+                NSLog("[TreeNB] 热启动消费小组件 pending launch: %@", pending.bundleName)
+                let engine = LCEngineEntry.shared()
+                do {
+                    try engine.launchGuestApp(pending.bundleName,
+                                              containerFolder: pending.container.isEmpty ? nil : pending.container,
+                                              launchURL: nil,
+                                              classicMode: 0)
+                    return true
+                } catch {
+                    UserDefaults.standard.set(error.localizedDescription,
+                                              forKey: "TNBLastGuestLaunchError")
+                }
+            }
+            // 没有 pending（例如用户在锁屏点了但已被消费）：非 TreeNB 处理，交还 openSSS。
+            return false
+
         case "container-launch", "livecontainer-launch":
             guard let bundle = query["bundle-name"], !bundle.isEmpty else { return false }
             let container = query["container-folder-name"]

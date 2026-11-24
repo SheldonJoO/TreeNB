@@ -7,14 +7,29 @@ import Foundation
 import SwiftUI
 import LiveContainerShared
 
+enum ContainerLayoutMode: String {
+    case list
+    case grid
+}
+
 @MainActor
 final class ContainerViewModel: ObservableObject {
     @Published var guestApps: [String] = []
     @Published var isBootstrapping = true
     @Published var installProgress: String? = nil
     @Published var lastError: String? = nil
+    /// 容器应用展示方式（宫格/列表），持久化到 UserDefaults。
+    @Published var layoutMode: ContainerLayoutMode = {
+        let raw = UserDefaults.standard.string(forKey: "TNBContainerLayoutMode")
+        return ContainerLayoutMode(rawValue: raw ?? "") ?? .list
+    }()
 
     private let engine = LCEngineEntry.shared()
+
+    func toggleLayout() {
+        layoutMode = (layoutMode == .list) ? .grid : .list
+        UserDefaults.standard.set(layoutMode.rawValue, forKey: "TNBContainerLayoutMode")
+    }
 
     /// 引擎初始化（幂等）
     func bootstrap() async {
@@ -71,6 +86,22 @@ final class ContainerViewModel: ObservableObject {
                 }
             })
         }
+    }
+
+    /// 卸载 guest：从磁盘真删（.app + 容器数据），再刷新列表与小组件快照。
+    func uninstall(bundle: String) async {
+        // ObjC 尾参 NSError** → Swift throws；不传 error: 实参。
+        var err: NSError?
+        var ok = false
+        do {
+            ok = try engine.uninstallGuest(bundle)
+        } catch {
+            err = error as NSError
+        }
+        if !ok {
+            lastError = err?.localizedDescription ?? "删除失败"
+        }
+        await refresh()
     }
 
     /// 启动 guest（进程主线权交给 guest；返回时宿主已恢复）

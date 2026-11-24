@@ -710,6 +710,71 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     return result;
 }
 
+#pragma mark - Uninstall
+
+- (BOOL)uninstallGuest:(NSString *)bundleName error:(NSError **)error {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray<NSURL *> *appPaths = [NSMutableArray array];
+    if (self.bundleRoot) {
+        [appPaths addObject:[self.bundleRoot URLByAppendingPathComponent:bundleName isDirectory:YES]];
+    }
+    if (self.groupBundleRoot) {
+        [appPaths addObject:[self.groupBundleRoot URLByAppendingPathComponent:bundleName isDirectory:YES]];
+    }
+
+    // 删除前先读 LCAppInfo 拿 dataUUID，好把容器数据目录一起清掉。
+    NSMutableSet<NSString *> *dataUUIDs = [NSMutableSet set];
+    for (NSURL *appPath in appPaths) {
+        NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:
+                              [appPath URLByAppendingPathComponent:@"LCAppInfo.plist"].path];
+        NSString *uuid = info[@"LCDataUUID"];
+        if (uuid.length) { [dataUUIDs addObject:uuid]; }
+    }
+
+    NSInteger removed = 0;
+    for (NSURL *appPath in appPaths) {
+        if ([fm fileExistsAtPath:appPath.path]) {
+            NSError *rmErr = nil;
+            if (![fm removeItemAtURL:appPath error:&rmErr]) {
+                if (error) {
+                    *error = [NSError errorWithDomain:TNBEngineErrorDomain code:20
+                                            userInfo:@{NSLocalizedDescriptionKey:
+                                                [NSString stringWithFormat:@"删除应用目录失败: %@", rmErr.localizedDescription]}];
+                }
+                return NO;
+            }
+            removed++;
+        }
+    }
+
+    // 容器数据：bundleRoot/Data/Application/<dataUUID>（安装时创建的骨架）
+    if (self.bundleRoot) {
+        NSURL *dataRoot = [self.bundleRoot URLByAppendingPathComponent:@"Data/Application" isDirectory:YES];
+        for (NSString *uuid in dataUUIDs) {
+            NSURL *dataDir = [dataRoot URLByAppendingPathComponent:uuid isDirectory:YES];
+            if ([fm fileExistsAtPath:dataDir.path]) { [fm removeItemAtURL:dataDir error:nil]; }
+        }
+    }
+
+    // 如果该 guest 正是上次启动选择，清掉，避免冷启动误进已删应用。
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([bundleName isEqualToString:[defaults stringForKey:@"selected"]]) {
+        [defaults removeObjectForKey:@"selected"];
+        [defaults removeObjectForKey:@"selectedContainer"];
+    }
+
+    if (removed == 0) {
+        if (error) {
+            *error = [NSError errorWithDomain:TNBEngineErrorDomain code:21
+                                    userInfo:@{NSLocalizedDescriptionKey:
+                                        [NSString stringWithFormat:@"未找到应用目录: %@", bundleName]}];
+        }
+        return NO;
+    }
+    NSLog(@"[TreeNB] 已卸载 guest: %@ (%ld 处目录)", bundleName, (long)removed);
+    return YES;
+}
+
 #pragma mark - Sign
 
 - (BOOL)signGuestAtPath:(NSString *)appPath error:(NSError **)error {

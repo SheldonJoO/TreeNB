@@ -90,6 +90,66 @@ public enum TNBWidgetStore {
         return try? JSONDecoder().decode(TNBWidgetSnapshot.self, from: data)
     }
 
+    // MARK: - Pending launch（widget 点击 → 主 App 冷启动直达指定 guest）
+    // 存同一 Keychain group 的独立 account。冷启动 main.swift 在 UIApplicationMain
+    // 之前读它，避免依赖 SceneDelegate 才拿得到的 URL 参数（那会导致残留 selected
+    // 被误用 = 进错 App，且先闪一下 openSSS）。
+
+    public static let pendingAccount = "pending-launch.v1"
+
+    public struct PendingLaunch: Codable {
+        public let bundleName: String
+        public let container: String
+        public let timestamp: TimeInterval
+    }
+
+    /// Widget 点击时写入目标 guest（App Intent 的 perform 里调用）
+    public static func writePendingLaunch(bundle: String, container: String) {
+        let pending = PendingLaunch(bundleName: bundle,
+                                    container: container,
+                                    timestamp: Date().timeIntervalSince1970)
+        guard let data = try? JSONEncoder().encode(pending) else { return }
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: pendingAccount
+        ]
+        var add = base
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            SecItemUpdate(base as CFDictionary,
+                          [kSecValueData as String: data] as CFDictionary)
+        }
+    }
+
+    /// 主 App 冷启动时读取并清除。超过 10 秒视为陈旧丢弃（避免误启动）。
+    public static func consumePendingLaunch() -> PendingLaunch? {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: pendingAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let pending = try? JSONDecoder().decode(PendingLaunch.self, from: data) else {
+            return nil
+        }
+        // 无论是否过期都删除，杜绝重复消费
+        let del: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: pendingAccount
+        ]
+        SecItemDelete(del as CFDictionary)
+        guard Date().timeIntervalSince1970 - pending.timestamp < 10 else { return nil }
+        return pending
+    }
+
     /// App Group 辅助通道（能用时双写，提高命中率）
     public static func writeToAppGroup(_ snapshot: TNBWidgetSnapshot) {
         guard let data = try? JSONEncoder().encode(snapshot) else { return }

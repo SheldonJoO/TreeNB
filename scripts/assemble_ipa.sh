@@ -106,6 +106,23 @@ if ! grep -q 'takeOverIfGuestPending' "$MAIN_ENTRY"; then
   echo "致命错误: main.swift 未调用 takeOverIfGuestPending，guest 冷启动不会接管。" >&2
   exit 1
 fi
+# ★ Widget 直达精确启动 + 零闪屏（2026-11-24）：main.swift 必须在
+#   UIApplicationMain 之前消费小组件 pending launch，否则点组件仍会进上次残留的
+#   guest 且先闪一下 openSSS。
+if ! grep -q 'consumePendingLaunch' "$MAIN_ENTRY"; then
+  echo "致命错误: main.swift 未消费小组件 pending launch，点组件会进错 App 且闪屏。" >&2
+  exit 1
+fi
+WIDGET_BRIDGE="upstream/openSSS/AltStore/TreeNB/Container/TreeWidgetBridge.swift"
+if ! grep -q 'func consumePendingLaunch' "$WIDGET_BRIDGE" 2>/dev/null; then
+  echo "致命错误: TreeWidgetBridge 缺少 consumePendingLaunch，widget pending 通道不成立。" >&2
+  exit 1
+fi
+LAUNCH_INTENT="upstream/openSSS/AltWidget/TreeNB/TNBLaunchGuestIntent.swift"
+if [ ! -f "$LAUNCH_INTENT" ] || ! grep -q 'writePendingLaunch' "$LAUNCH_INTENT"; then
+  echo "致命错误: 缺少 TNBLaunchGuestIntent（widget 点击直达 guest 的 App Intent）。" >&2
+  exit 1
+fi
 if grep -q '^@UIApplicationMain' upstream/openSSS/AltStore/AppDelegate.swift 2>/dev/null; then
   echo "致命错误: AppDelegate.swift 仍带 @UIApplicationMain，与 main.swift 重复入口（编译失败）。" >&2
   exit 1
@@ -138,6 +155,24 @@ fi
 if ! grep -q 'launchToGuestAppWithClassicMode' "$ENGINE_SRC"; then
   echo "致命错误: launchGuestApp 未委托 LCSharedUtils 重启进程，热调 LiveContainerMain 会闪退。" >&2
   exit 1
+fi
+# ★ 卸载真删校验（2026-11-24）：容器 App 删除后必须真删磁盘目录，
+#   否则 installedGuestBundleNames 下次扫描把它捞回来（"删了又出现"）。
+if ! grep -q 'uninstallGuest' "$ENGINE_SRC"; then
+  echo "致命错误: LCEngineEntry.m 缺少 uninstallGuest 真删实现，删除会复现。" >&2
+  exit 1
+fi
+ROOT_VIEW="upstream/openSSS/AltStore/TreeNB/Container/ContainerRootView.swift"
+if [ -f "$ROOT_VIEW" ]; then
+  if ! grep -q 'model.uninstall' "$ROOT_VIEW"; then
+    echo "致命错误: ContainerRootView 删除未接引擎卸载，只是 UI 假删除。" >&2
+    exit 1
+  fi
+  if ! grep -q 'layoutMode' "$ROOT_VIEW"; then
+    echo "致命错误: ContainerRootView 缺少宫格/列表切换实现。" >&2
+    exit 1
+  fi
+  echo "  卸载真删 + 宫格/列表切换校验通过"
 fi
 if ! grep -q 'ensureHostLaunchOverrides' "$ENGINE_SRC"; then
   echo "致命错误: 缺少宿主 URL scheme / App Group 覆盖注入，重签后 lcAppUrlScheme/lcAppGroupPath 会拿错导致 guest 闪退。" >&2

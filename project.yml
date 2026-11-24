@@ -637,6 +637,8 @@ targets:
         product: CodeSignKit
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
+      # TNBLaunchGuestIntent 用 AppIntent/OpenURLIntent 实现 widget 点击直达 guest
+      - sdk: AppIntents.framework
 
 # ---------- Schemes ----------
 schemes:

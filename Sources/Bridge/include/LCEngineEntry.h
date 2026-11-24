@@ -92,6 +92,13 @@ typedef void (^TNBInstallCompletion)(BOOL success, NSString *_Nullable appBundle
 /// 列出已安装的 guest（返回 .app 目录名数组）
 - (NSArray<NSString *> *)installedGuestBundleNames;
 
+/// 卸载一个已安装的 guest：删除 .app 目录 + 它的容器数据目录 + 小组件筛选记录。
+/// 必须从磁盘真删，否则 installedGuestBundleNames 下次扫描会把它捞回来（"删了又出现"）。
+/// @param bundleName  .app 目录名
+/// @param error  失败原因
+/// @return YES 表示删除完成
+- (BOOL)uninstallGuest:(NSString *)bundleName error:(NSError **)error;
+
 /// 本地签名一个已 patch 的 guest（ZSign + 证书来自 Keychain）
 - (BOOL)signGuestAtPath:(NSString *)appPath error:(NSError **)error;
 

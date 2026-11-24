@@ -54,6 +54,12 @@ struct ContainerRootView: View {
                     .accessibilityLabel("Spike 自检")
                     #endif
                     SwiftUI.Button {
+                        model.toggleLayout()
+                    } label: {
+                        Image(systemName: model.layoutMode == .list ? "square.grid.2x2" : "list.bullet")
+                    }
+                    .accessibilityLabel(model.layoutMode == .list ? "切换到宫格" : "切换到列表")
+                    SwiftUI.Button {
                         showWidgetSettings = true
                     } label: {
                         Image(systemName: "rectangle.grid.2x2")
@@ -136,7 +142,17 @@ struct ContainerRootView: View {
         }
     }
 
+    @ViewBuilder
     private var guestList: some View {
+        switch model.layoutMode {
+        case .list:
+            listView
+        case .grid:
+            gridView
+        }
+    }
+
+    private var listView: some View {
         List {
             Section {
                 ForEach(model.guestApps, id: \.self) { bundle in
@@ -145,15 +161,49 @@ struct ContainerRootView: View {
                     }
                 }
                 .onDelete { indexSet in
-                    // Stage 2: 删除容器 + 目录清理
+                    delete(at: indexSet)
                 }
             } header: {
                 Text("已安装 \(model.guestApps.count) 个应用")
             } footer: {
-                Text("点按应用会全屏运行；运行时用悬浮键返回此页面。")
+                Text("点按应用会全屏运行；运行时用悬浮键返回此页面。左滑可卸载。")
             }
         }
         .refreshable { await model.refresh() }
+    }
+
+    private var gridView: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 16)], spacing: 20) {
+                ForEach(model.guestApps, id: \.self) { bundle in
+                    GuestTile(bundle: bundle) {
+                        Task { await model.launch(bundle: bundle) }
+                    }
+                    .contextMenu {
+                        SwiftUI.Button(role: .destructive) {
+                            Task { await model.uninstall(bundle: bundle) }
+                        } label: {
+                            Label("卸载", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+        .refreshable { await model.refresh() }
+    }
+
+    /// 先本地移除让 UI 立即响应，再让引擎从磁盘真删并刷新（防止"删了又出现"）。
+    private func delete(at indexSet: IndexSet) {
+        let bundles = indexSet.compactMap { model.guestApps.indices.contains($0) ? model.guestApps[$0] : nil }
+        withAnimation {
+            model.guestApps.remove(atOffsets: indexSet)
+        }
+        Task {
+            for bundle in bundles {
+                await model.uninstall(bundle: bundle)
+            }
+        }
     }
 }
 
@@ -179,6 +229,43 @@ private struct GuestRow: View {
                 Spacer()
                 Image(systemName: "chevron.right").foregroundStyle(.tertiary)
             }
+        }
+        .buttonStyle(.plain)
+        .task {
+            icon = await IconLoader.icon(for: bundle)
+        }
+    }
+
+    private var displayName: String {
+        (bundle as NSString).deletingPathExtension
+    }
+}
+
+private struct GuestTile: View {
+    let bundle: String
+    let launch: () -> Void
+    @State private var icon: UIImage?
+
+    var body: some View {
+        SwiftUI.Button(action: launch) {
+            VStack(spacing: 6) {
+                Group {
+                    if let icon {
+                        Image(uiImage: icon).resizable().scaledToFit()
+                    } else {
+                        Image(systemName: "app.fill").resizable().scaledToFit()
+                            .foregroundStyle(.tint)
+                    }
+                }
+                .frame(width: 50, height: 50)
+                .clipShape(RoundedRectangle(cornerRadius: 11))
+
+                Text(displayName)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+            }
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
         .task {
