@@ -28,6 +28,26 @@ if ! echo "$BGMODES" | grep -q "location"; then
 fi
 echo "  UIBackgroundModes 含 location，校验通过"
 
+# 虚拟定位真修复校验：IDevice 必须是带 location_simulation 的自编译产物，
+# 且不得编入旧的 C 假桩（否则 duplicate symbol 或定位仍是假的）。
+IDEF_LIB="upstream/openSSS/local/idevice/swift/IDevice.xcframework/ios-arm64/libidevice_ffi.a"
+if [ ! -f "$IDEF_LIB" ]; then
+  echo "致命错误: 缺少自编译 IDevice 产物 $IDEF_LIB，虚拟定位会失效。" >&2
+  echo "请确认 CI/本地已跑 scripts/build_idevice.sh。" >&2
+  exit 1
+fi
+for locsym in location_simulation_new location_simulation_set location_simulation_clear location_simulation_free; do
+  if [ "$(nm -gU "$IDEF_LIB" 2>/dev/null | grep -c "_${locsym}$")" -eq 0 ]; then
+    echo "致命错误: 自编译 IDevice 缺定位符号 _${locsym}，虚拟定位不会生效。" >&2
+    exit 1
+  fi
+done
+if [ -f "upstream/openSSS/AltStore/TreeNB/location_simulation_stubs.c" ]; then
+  echo "致命错误: 定位假桩 location_simulation_stubs.c 被编入，与真符号冲突。" >&2
+  exit 1
+fi
+echo "  虚拟定位真修复校验通过（自编译四符号齐全 + 无假桩）"
+
 # IPA 文档类型：UIDocumentPicker 按 com.apple.itunes.ipa 过滤，缺声明则选不了 .ipa 文件。
 IPA_DECL=$(/usr/libexec/PlistBuddy -c "Print :UTImportedTypeDeclarations" "$APP/Info.plist" 2>/dev/null || true)
 if ! echo "$IPA_DECL" | grep -q "com.apple.itunes.ipa"; then

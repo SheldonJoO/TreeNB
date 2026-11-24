@@ -346,28 +346,44 @@ else:
 PY
 fi
 
-# A6. minimuxer/DeviceGateway 的 IDevice.xcframework 指向构建机本地目录（不进 git），
-#     CI 上 SPM 会报 "does not contain a binary artifact"。切到上游注释里保留的
-#     官方 release URL + checksum（同一份二进制，仅来源不同）。
+# A6. IDevice.xcframework 必须是带 location_simulation 的自编译产物。
+#     上游原始 Package.swift 就是 path: "../../../local/idevice/swift/IDevice.xcframework"
+#     —— 这正是作者预期的「本地自编译」路径（注释明确写了 release 缺定位符号）。
+#     build_idevice.sh 已在 prepare 阶段把带符号的 xcframework 落地到该路径。
+#     这里做硬校验：既确保 path 没被改回 URL，也确保产物与四个定位符号都在。
 DG_PKG="$SSS/Dependencies/minimuxer/DeviceGateway/Package.swift"
+IDEF_XCF="$SSS/local/idevice/swift/IDevice.xcframework"
+IDEF_LIB="$IDEF_XCF/ios-arm64/libidevice_ffi.a"
 if [ -f "$DG_PKG" ]; then
   python3 - "$DG_PKG" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-needle = 'path: "../../../local/idevice/swift/IDevice.xcframework"'
-replacement = ('url: "https://github.com/SideStore/idevice/releases/download/'
-               'v0.1.68-ss-3e55c84/idevice-xcframework-v0.1.68-ss-3e55c84.zip#DeviceGateway",\n'
-               '        checksum: "445702d53942597deb4cdec2c4122d16a3f4ac124ce26cd75b68dab3dad92416"')
-if needle in s:
-    s = s.replace(needle, replacement, 1)
+# 若上游被改回 URL（例如手改），强行改回本地 path。
+if 'url: "https://github.com/SideStore/idevice/releases' in s or 'checksum:' in s:
+    import re
+    s = re.sub(
+        r'\.binaryTarget\(\s*name:\s*"IDevice"\s*,\s*url:\s*"[^"]+"\s*,\s*checksum:\s*"[^"]+"\s*\)',
+        '.binaryTarget(\n            name: "IDevice",\n            path: "../../../local/idevice/swift/IDevice.xcframework"\n        )',
+        s, count=1)
     open(p, 'w', encoding='utf-8').write(s)
-    print('  DeviceGateway/Package.swift: IDevice 已改从 release URL 获取')
+    print('  DeviceGateway/Package.swift: IDevice 已改回本地自编译 path')
 else:
-    print('  DeviceGateway/Package.swift: 无需改（已切换或上游已变）')
+    print('  DeviceGateway/Package.swift: IDevice 已是本地 path（无需改）')
 PY
+  grep -q 'path: "../../../local/idevice/swift/IDevice.xcframework"' "$DG_PKG" \
+    || { echo "FATAL[A6]: IDevice binaryTarget 未指向本地自编译 path" >&2; exit 2; }
+  # 产物存在 + 定位符号硬校验（缺一个都拒绝出包，杜绝回到假桩）
+  [ -f "$IDEF_LIB" ] || { echo "FATAL[A6]: 缺少 $IDEF_LIB，请先跑 scripts/build_idevice.sh" >&2; exit 2; }
+  for sym in location_simulation_new location_simulation_set \
+             location_simulation_clear location_simulation_free; do
+    [ "$(nm -gU "$IDEF_LIB" 2>/dev/null | grep -c "_${sym}$")" -gt 0 ] \
+      || { echo "FATAL[A6]: 自编译 IDevice 缺符号 _${sym}" >&2; exit 2; }
+  done
+  ok "IDevice 自编译产物就位且四定位符号齐全（虚拟定位真修复）"
 else
-  warn "DeviceGateway/Package.swift 缺失，跳过 IDevice 修复"
+  echo "FATAL[A6]: DeviceGateway/Package.swift 缺失，无法接入 IDevice" >&2
+  exit 2
 fi
 
 # ---------------------------------------------------------------------------
@@ -832,10 +848,9 @@ else
   warn "未找到 $ABOUT，跳过关于页品牌归一"
 fi
 
-# B1h. 虚拟定位诚实提示：精简单包用的 IDevice release 未编 location_simulation
-# feature（nm 实测 ios-arm64/libidevice_ffi.a 无任何 location_simulation 符号），
-# 故 TreeNB 用 C 空桩让上层不崩。但空桩 set 恒返回"成功"，UI 会误报"模拟已开始"。
-# 这里把 Toast 与 status footer 改成诚实说明，避免用户以为定位真生效。
+# B1h. 虚拟定位：自 A6 起 IDevice 用带 location_simulation 的自编译产物，
+#     定位链路是真实现（DVT 直连 / Mac 助手），不再需要降级提示。
+#     幂等清理：若上游/历史构建残留了旧版「暂不可用」文案，还原成原文案。
 LOCVIEW="$SSS/AltStore/Shell/LocationSimulationViewController.swift"
 if [ -f "$LOCVIEW" ]; then
   python3 - "$LOCVIEW" <<'PY'
@@ -843,25 +858,25 @@ import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 o = s
-# 成功 Toast → 诚实提示（空桩未真的改坐标）
 s = s.replace(
-    'ToastView(text: NSLocalizedString("Location simulation started", comment: ""),',
-    'ToastView(text: "本机虚拟定位暂不可用（精简版缺少定位驱动）",')
-# status section footer → 说明现状
+    'ToastView(text: "本机虚拟定位暂不可用（精简版缺少定位驱动）",',
+    'ToastView(text: NSLocalizedString("Location simulation started", comment: ""),')
 s = s.replace(
-    'return NSLocalizedString("The simulated location is delivered by the on-device direct connection (Apple\'s DVT developer service) or by the location-helper on your Mac, and applies system-wide. Stop and restore the real location when you are done.", comment: "")',
-    'return "当前为精简单包，内置定位驱动未编译位置模拟功能，本机虚拟定位暂不可用。可配置 Mac 定位助手地址走局域网方案。"')
+    'return "当前为精简单包，内置定位驱动未编译位置模拟功能，本机虚拟定位暂不可用。可配置 Mac 定位助手地址走局域网方案。"',
+    'return NSLocalizedString("The simulated location is delivered by the on-device direct connection (Apple\'s DVT developer service) or by the location-helper on your Mac, and applies system-wide. Stop and restore the real location when you are done.", comment: "")')
 if s != o:
     open(p, 'w', encoding='utf-8').write(s)
-    print('  LocationSimulationViewController.swift: 虚拟定位诚实提示已注入')
+    print('  LocationSimulationViewController.swift: 已还原真实定位文案')
 else:
-    print('  LocationSimulationViewController.swift: 提示已就位（幂等）')
+    print('  LocationSimulationViewController.swift: 定位文案正常（无需改）')
 PY
-  grep -q '本机虚拟定位暂不可用' "$LOCVIEW" \
-    || { echo "FATAL[B1h]: 虚拟定位提示注入失败" >&2; exit 2; }
-  ok "虚拟定位诚实提示已校验"
+  if grep -q '本机虚拟定位暂不可用' "$LOCVIEW"; then
+    echo "FATAL[B1h]: 仍残留虚拟定位降级文案" >&2
+    exit 2
+  fi
+  ok "虚拟定位文案已校验（真实定位链路）"
 else
-  warn "未找到 $LOCVIEW，跳过虚拟定位提示"
+  warn "未找到 $LOCVIEW，跳过虚拟定位文案检查"
 fi
 
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
@@ -959,11 +974,10 @@ cp "$ROOT/Sources/Container/"*.swift "$SSS/AltStore/TreeNB/Container/" 2>/dev/nu
 # 挂进主 App 与 Widget 两个 target 各编一份（不同 module，不冲突）。
 cp "$ROOT/Sources/Widget/TreeWidgetBridge.swift" "$SSS/AltStore/TreeNB/Container/" 2>/dev/null || true
 cp "$ROOT/Sources/Routing/"*.swift   "$SSS/AltStore/TreeNB/Routing/"  2>/dev/null || true
-# SideStore.debugLog 兼容层 + IDevice 定位模拟符号补齐桩
-# SideStore.debugLog：上游把它当 module 限定调用，单包后 module 不存在。
-# location_simulation_*：官方 release IDevice.xcframework 没编这个功能，缺符号。
-cp "$ROOT/Sources/Compat/"*.swift    "$SSS/AltStore/TreeNB/"          2>/dev/null || true
-cp "$ROOT/Sources/Compat/"*.c        "$SSS/AltStore/TreeNB/"          2>/dev/null || true
+# SideStore.debugLog 兼容层（上游把它当 module 限定调用，单包后 module 不存在）。
+# 注意：不再复制 location_simulation_stubs.c —— IDevice 现已用带 location_simulation
+# 的自编译产物（见 build_idevice.sh / A6），再编 C 桩会 duplicate symbol。
+cp "$ROOT/Sources/Compat/SideStoreCompat.swift" "$SSS/AltStore/TreeNB/" 2>/dev/null || true
 cp "$ROOT/Sources/Widget/"*.swift    "$SSS/AltWidget/TreeNB/"         2>/dev/null || true
 # LC 引擎桥接层挂进 LiveContainer 源码树（framework target 从这里编译）
 mkdir -p "$LC/LiveContainer/TreeNBBridge/include"

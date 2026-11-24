@@ -67,7 +67,19 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
-      # 拉上游源码 → 打单包补丁 → 注入 Spike 宏 → OpenSSL → xcodegen generate
+      # 自编译带 location_simulation 的 IDevice 需要 Rust 工具链（CI runner 不保证预装）。
+      # 用国内镜像避免runner偶发的 static.rust-lang.org TLS 抖动；macos-15-intel 是 x86_64 host。
+      - name: Install Rust toolchain (for IDevice location_simulation build)
+        run: |
+          export RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup"
+          export RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
+          sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" target add aarch64-apple-ios
+          "$HOME/.cargo/bin/rustc" --version
+
+      # 拉上游源码 → 自编译 IDevice(定位符号) → 打单包补丁 → OpenSSL → xcodegen generate
       - name: Prepare dependencies & generate project
         env:
           SPIKE: ${{ inputs.spike }}

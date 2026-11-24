@@ -82,6 +82,12 @@ else
   ok "OpenSSL.xcframework 已存在，跳过"
 fi
 
+# 2b. 自编译带 location_simulation 的 IDevice.xcframework（虚拟定位真修复）。
+#     必须在 patch 之前：patch_upstream.sh 的 A6 会硬校验产物与四个定位符号。
+#     CI 与本地通用；幂等，已有带符号产物会跳过。
+log "自编译 IDevice.xcframework（location_simulation）"
+bash ./scripts/build_idevice.sh
+
 # 3. 结构性改造（删除跳转分支 / 身份归一 / Widget 并入 / 挂载适配源码）
 log "执行上游改造补丁"
 bash ./scripts/patch_upstream.sh
