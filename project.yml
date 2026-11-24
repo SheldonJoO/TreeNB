@@ -487,15 +487,18 @@ targets:
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/upstream/TreeNewBee/ZSign
           - $(SRCROOT)/upstream/TreeNewBee/ZSign/common
-        # OpenSSL.xcframework 的 Headers 里是 <openssl/*.h>。
-        FRAMEWORK_SEARCH_PATHS:
-          - $(SRCROOT)/Dependencies
+          # <openssl/*.h> 用本地下载的 xcframework slice 的 Headers（仅头文件，不参与 embed）。
+          - $(SRCROOT)/Dependencies/OpenSSL.xcframework/ios-arm64/OpenSSL.framework/Headers
+        # 关键：不能用 `dependencies: - framework: OpenSSL.xcframework`。
+        # 主 App 已由 SPM(remotepairingkit) 引了同名 OpenSSL.xcframework；再用 framework
+        # 依赖引 Dependencies 那份会让两个来源都输出 OpenSSL.framework → "Unexpected duplicate tasks"。
+        # 这里改用 OTHER_LDFLAGS 直接链本地 slice 的二进制（不产生 ProcessXCFramework 任务）。
+        # 运行期 ZSign 的 @rpath/OpenSSL.framework/OpenSSL 命中主 App 已 embed 的那份（bundle id 相同）。
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -F$(SRCROOT)/Dependencies/OpenSSL.xcframework/ios-arm64
+          - -framework OpenSSL
         SKIP_INSTALL: YES
-    dependencies:
-      # 链接但不 embed：主 App 已通过 openSSS 的 SPM 签名栈把 OpenSSL.framework 放进
-      # Frameworks/，ZSign 运行时从 @rpath 复用它，避免两处 embed 同一 bundle 冲突。
-      - framework: Dependencies/OpenSSL.xcframework
-        embed: false
 
   # ===== 4. Widget extension（openSSS AltWidget + TreeWidget 并入）=====
   AltWidgetExtension:
