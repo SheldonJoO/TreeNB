@@ -102,6 +102,17 @@ if ! grep -q 'launchToGuestAppWithClassicMode' "$ENGINE_SRC"; then
 fi
 echo "  guest 冷启动接管链路校验通过"
 
+echo "==> [1.9/4] 校验小组件快照写入链路"
+if ! grep -rq 'TNBWidgetSnapshotWriter' Sources/Container/WidgetSettings.swift 2>/dev/null; then
+  echo "致命错误: 缺少小组件快照写入器，小组件会永远显示空。" >&2
+  exit 1
+fi
+if ! grep -q 'WidgetKit.framework' project.yml; then
+  echo "致命错误: 主 App 缺少 WidgetKit.framework 依赖，WidgetCenter 刷新会链接失败。" >&2
+  exit 1
+fi
+echo "  小组件快照写入链路校验通过"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 

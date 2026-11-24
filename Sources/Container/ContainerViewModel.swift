@@ -35,6 +35,8 @@ final class ContainerViewModel: ObservableObject {
     /// 刷新已安装 guest 列表
     func refresh() async {
         guestApps = engine.installedGuestBundleNames().sorted()
+        // 同步刷新小组件快照（容器应用变动后小组件列表跟着更新）
+        _ = TNBWidgetSnapshotWriter.refresh()
     }
 
     /// 导入并安装 IPA

@@ -17,6 +17,7 @@ import LiveContainerShared
 struct ContainerRootView: View {
     @StateObject private var model = ContainerViewModel()
     @State private var showImporter = false
+    @State private var showWidgetSettings = false
 
     var body: some View {
         AdaptiveNavigation {
@@ -52,6 +53,12 @@ struct ContainerRootView: View {
                     .accessibilityLabel("Spike 自检")
                     #endif
                     SwiftUI.Button {
+                        showWidgetSettings = true
+                    } label: {
+                        Image(systemName: "rectangle.grid.2x2")
+                    }
+                    .accessibilityLabel("小组件应用设置")
+                    SwiftUI.Button {
                         showImporter = true
                     } label: {
                         Image(systemName: "plus.circle.fill")
@@ -65,6 +72,16 @@ struct ContainerRootView: View {
                     Task { await model.install(ipaURL: url) }
                 } onCancel: {
                     showImporter = false
+                }
+            }
+            .sheet(isPresented: $showWidgetSettings) {
+                AdaptiveNavigation {
+                    WidgetAppSelectionView()
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                SwiftUI.Button("完成") { showWidgetSettings = false }
+                            }
+                        }
                 }
             }
             .alert("容器错误", isPresented: Binding(

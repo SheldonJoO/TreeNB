@@ -392,6 +392,10 @@ fi
 log "C. 挂载 TreeNB 适配源码到上游树"
 mkdir -p "$SSS/AltStore/TreeNB/Container" "$SSS/AltStore/TreeNB/Routing" "$SSS/AltWidget/TreeNB"
 cp "$ROOT/Sources/Container/"*.swift "$SSS/AltStore/TreeNB/Container/" 2>/dev/null || true
+# WidgetSettings.swift 需要 TNBWidgetStore/TNBWidgetSnapshot 等数据模型（定义在
+# TreeWidgetBridge.swift）。该文件只 import Foundation/UIKit/Security，无 WidgetKit 依赖，
+# 挂进主 App 与 Widget 两个 target 各编一份（不同 module，不冲突）。
+cp "$ROOT/Sources/Widget/TreeWidgetBridge.swift" "$SSS/AltStore/TreeNB/Container/" 2>/dev/null || true
 cp "$ROOT/Sources/Routing/"*.swift   "$SSS/AltStore/TreeNB/Routing/"  2>/dev/null || true
 # SideStore.debugLog 兼容层 + IDevice 定位模拟符号补齐桩
 # SideStore.debugLog：上游把它当 module 限定调用，单包后 module 不存在。
