@@ -30,6 +30,7 @@ NSErrorDomain const TNBEngineErrorDomain = @"com.openssai.app.LCEngineError";
 + (NSURL *)appGroupPath;
 + (NSString *)appGroupID;
 + (NSString *)certificatePassword;
++ (NSString *)teamIdentifier;
 + (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode;
 + (NSString *)findDefaultContainerWithBundleId:(NSString *)bundleId;
 @end
@@ -199,18 +200,56 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     }
 }
 
-/// 证书自动导入：打包时把 p12 注入 App bundle（本地注入，不进公开仓库），
-/// 首次启动自动写进上游读取的 LCCertificateData / LCCertificatePassword。
-/// 用户已手动导入过证书时尊重用户选择，不覆盖。
+/// 证书自动导入（team 感知）：
+/// JITLess 要求 guest 必须用与宿主 App **完全相同 team** 的证书重签，否则签出来的
+/// application-identifier / entitlements 与宿主不匹配 → dyld library validation 失败
+/// → signal 级崩溃、走不到 OC 异常处理器（表现就是"闪退且无错误代码"）。
+///
+/// 打包时把若干 p12 注入 App bundle，文件名带 team：
+///   TreeNBSigningCertificate-<TEAM>.p12，例如 TreeNBSigningCertificate-UBKLUGLLLK.p12
+/// 启动时读取宿主实际签名 team（SecTaskCopyValueForEntitlement），优先选对应文件；
+/// 若用户频繁换证书导致多个文件都在，只选 team 匹配的那个，避免又用错旧证书。
+/// 检测到已导入证书的字节与应选证书不同，会自动刷新并重签。
 + (void)autoImportBundledCertificateIfNeeded {
-    if ([self hasJITLessCertificate]) { return; }
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"TreeNBSigningCertificate" ofType:@"p12"];
-    if (!path.length) { return; }
+    NSString *team = [LCSharedUtils teamIdentifier];
+    NSLog(@"[TreeNB] 宿主签名 team=%@，开始匹配内置证书", team ?: @"(未知)");
+
+    NSBundle *bundle = NSBundle.mainBundle;
+    NSString *path = nil;
+    // 1) 精确匹配 team 的证书
+    if (team.length) {
+        path = [bundle pathForResource:[NSString stringWithFormat:@"TreeNBSigningCertificate-%@", team]
+                               ofType:@"p12"];
+    }
+    // 2) 兜底：无 team 信息时用通用名（老包兼容）
+    if (!path.length) {
+        path = [bundle pathForResource:@"TreeNBSigningCertificate" ofType:@"p12"];
+    }
+    // 3) 再兜底：bundle 里任意 TreeNBSigningCertificate-*.p12 取第一个
+    if (!path.length) {
+        for (NSString *p in [bundle pathsForResourcesOfType:@"p12" inDirectory:nil]) {
+            if ([[p lastPathComponent] hasPrefix:@"TreeNBSigningCertificate"]) { path = p; break; }
+        }
+    }
+    if (!path.length) { NSLog(@"[TreeNB] 未找到任何内置证书"); return; }
+
     NSData *p12 = [NSData dataWithContentsOfFile:path];
     if (!p12.length) { return; }
+
+    // 已导入的就是目标证书（且 team 没变）→ 不重复导入、不重签。
+    NSData *existing = [[self tnb_certDefaults] objectForKey:kTNBKeyCertData] ?:
+                       [NSUserDefaults.standardUserDefaults objectForKey:kTNBKeyCertData];
+    NSString *boundTeam = [[NSUserDefaults standardUserDefaults] stringForKey:@"TNBCertBoundTeam"];
+    if ([existing isEqualToData:p12] && [boundTeam isEqualToString:team ?: @""]) {
+        NSLog(@"[TreeNB] 内置证书未变化，跳过导入");
+        return;
+    }
+
     [self importJITLessCertificate:p12 password:@""];
+    [[NSUserDefaults standardUserDefaults] setObject:(team ?: @"") forKey:@"TNBCertBoundTeam"];
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"TNBAutoResignPending"];
-    NSLog(@"[TreeNB] 已自动导入内置 JIT-less 证书 (%lu bytes)", (unsigned long)p12.length);
+    NSLog(@"[TreeNB] 已自动导入内置证书 %@ (%lu bytes)",
+          [path lastPathComponent], (unsigned long)p12.length);
 }
 
 /// 自动导入证书后的首次启动，用该证书把已装 guest 重签一次（异步，不阻塞 UI）。
