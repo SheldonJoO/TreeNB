@@ -130,6 +130,12 @@ targets:
           # 漏排会导致链接期一堆 XCTest/XCTestCase/XCUIApplication undefined symbols。
           - '**/Tests/**'
       - path: upstream/openSSS/Shared
+      # --- Husk 翻译层运行资源（ANGLE 渲染用）---
+      # 只 embed 不 link：翻译层运行时按路径 dlopen libANGLE-shared.dylib。
+      - path: vendor/husk/frameworks/libANGLE-shared.dylib
+        buildPhase: resources
+      - path: vendor/husk/resources
+        buildPhase: resources
       # 资源 xcassets 由 AltStore/ 递归包含（真实路径 AltStore/Core/Resources/Colors.xcassets，
       # 不存在 AltStore/Assets.xcassets —— xcodegen 对缺失 source 目录会直接报错）
     info:
@@ -190,6 +196,13 @@ targets:
               - org.openssai.mobiledevicepairing
             CFBundleTypeRole: Viewer
             LSHandlerRank: Alternate
+          # Husk 翻译层：安卓 APK 导入
+          - CFBundleTypeName: Android App
+            CFBundleTypeIconFiles: []
+            LSItemContentTypes:
+              - org.android.package-archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
           - CFBundleTypeName: All Files
             LSHandlerRank: Owner
             LSItemContentTypes:
@@ -212,6 +225,14 @@ targets:
               public.filename-extension:
                 - mobiledevicepairing
                 - mobiledevicepair
+          - UTTypeConformsTo:
+              - public.data
+            UTTypeDescription: Android App
+            UTTypeIconFiles: []
+            UTTypeIdentifier: org.android.package-archive
+            UTTypeTagSpecification:
+              public.mime-type: application/vnd.android.package-archive
+              public.filename-extension: apk
         LSSupportsOpeningDocumentsInPlace: true
         NFCReaderUsageDescription: The guest app is requesting for this permission.
         NSAlarmKitUsageDescription: The guest app is requesting for this permission.
@@ -315,6 +336,9 @@ targets:
         application-identifier: $(AppIdentifierPrefix)com.openssai.app
         get-task-allow: false
     dependencies:
+      # Husk 翻译层（Android APK 运行引擎），独立 framework 做符号隔离。
+      - target: HuskyEngine
+        embed: true
       # LC 引擎（多开核心）内嵌为 framework
       # 只用 `target:` 依赖，一次搞定 build order + link + embed。
       # 不要再叠加 `framework: ... embed: true`，否则会生成两个 Embed Frameworks
@@ -371,6 +395,68 @@ targets:
       - sdk: Network.framework
       # WidgetSettings.swift 调 WidgetCenter.reloadAllTimelines 刷新小组件
       - sdk: WidgetKit.framework
+
+  # ===== 1b. Husk 翻译层 framework（Android APK 运行引擎）=====
+  # 5.17 万行纯 C，脱离 QEMU 独立运行；不与 LiveContainerShared 的 dyld/symbol
+  # 操作共享编译单元，故独立成 framework 做符号隔离。
+  # GPL-2.0-or-later：整合后整个分发版需遵守 GPL 开源义务。
+  HuskyEngine:
+    type: com.apple.product-type.framework
+    platform: iOS
+    sources:
+      # 翻译层主体（纯 C + 4 个 .m）。排除头文件，走 publicHeaders/modulemap。
+      - path: vendor/husk/src/translation-layer-next
+        excludes:
+          - '**/*.h'
+          - '**/*.inc'
+      # ObjC wrapper（HuskyEngine.h/.m + modulemap）
+      - path: vendor/husk/bridge
+        excludes:
+          - 'module.modulemap'
+      - path: vendor/husk/bridge
+        headerVisibility: public
+        buildPhase: headers
+        excludes:
+          - '*.m'
+          - 'module.modulemap'
+    settings:
+      base:
+        PRODUCT_NAME: HuskyEngine
+        PRODUCT_BUNDLE_IDENTIFIER: com.openssai.app.HuskyEngine
+        INFOPLIST_FILE: config/HuskyEngine-Info.plist
+        IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+        SWIFT_VERSION: '5.10'
+        MODULEMAP_FILE: vendor/husk/bridge/module.modulemap
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/vendor/husk/bridge
+          - $(SRCROOT)/vendor/husk/src/translation-layer-next
+          # husk-tl-dvm-audio.c include 了 ../translation-layer/stb_vorbis.inc
+          - $(SRCROOT)/vendor/husk/src/translation-layer
+        # 翻译层大量 C 文件用 GNU C 扩展；关闭一些会误报的严格检查。
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - '$(inherited)'
+          - 'TL_APPLE=1'
+        CLANG_ENABLE_OBJC_ARC: YES
+        GCC_WARN_ABOUT_RETURN_TYPE: NO
+        GCC_WARN_UNUSED_VARIABLE: NO
+    dependencies:
+      - sdk: Foundation.framework
+      - sdk: UIKit.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreText.framework
+      - sdk: CoreGraphics.framework
+      - sdk: ImageIO.framework
+      - sdk: WebKit.framework
+      - sdk: VideoToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
+      - sdk: Accelerate.framework
+      - sdk: Security.framework
+      - sdk: libz.tbd
+      - sdk: libresolv.tbd
+      - sdk: libsqlite3.tbd
 
   # ===== 2. LC 引擎 framework（从 TreeNewBee 源码编译）=====
   LiveContainerShared:

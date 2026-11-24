@@ -1,0 +1,7 @@
+// TreeNB 内嵌 Husk 翻译层的 Clang module 定义
+// 让 Swift 侧 import HuskyEngine 时能拿到 ObjC wrapper 接口
+framework module HuskyEngine {
+    umbrella header "HuskyEngine.h"
+    export *
+    module * { export * }
+}
