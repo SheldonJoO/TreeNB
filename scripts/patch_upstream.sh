@@ -485,6 +485,7 @@ main_src = '''//
 //  没有才启动宿主 openSSS。
 //
 import UIKit
+import Foundation
 import LiveContainerShared
 
 if LCEngineEntry.takeOverIfGuestPending() {
@@ -525,6 +526,75 @@ PY
   ok "进程入口前移：main.swift 唯一 UIApplicationMain + AppDelegate 去注解，校验通过"
 else
   echo "FATAL[B1b]: 缺少 $APPDELEGATE，无法前移入口" >&2
+  exit 2
+fi
+
+# B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
+# ---------------------------------------------------------------------------
+# 现象：点小组件里的容器 App，只进 openSSS 界面，不启动对应 guest。
+# 根因：TNBDeepLinkRouter.shared.handle(url:) 从未被任何地方调用；上游
+# SceneDelegate 两处 URL 入口（冷启动 willConnectTo / 热启动 openURLContexts）
+# 都只调 openSSS 的 URLHandler，TreeNB 深链被完全忽略。
+# 修法：两处 URLHandler.shared.handle 之前先交给 TNBDeepLinkRouter，处理了就 return。
+# router 内部直接调 LCEngineEntry.launchGuestApp（写 selected + 重启进程 →
+# main.swift 接管进 guest），不依赖冷启动时尚未注册的 UI 观察者。
+SCENEDELEGATE="$SSS/AltStore/SceneDelegate.swift"
+if [ -f "$SCENEDELEGATE" ]; then
+  python3 - "$SCENEDELEGATE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+orig = s
+
+ROUTE = '''        if TNBDeepLinkRouter.shared.handle(url: context.url) { return }
+'''
+
+# 入口 1：冷启动 willConnectTo —— 只在 urlContexts.first 分支内插入。
+cold_old = '''        if let context = connectionOptions.urlContexts.first
+        {
+            URLHandler.shared.handle(context.url)
+        }'''
+cold_new = '''        if let context = connectionOptions.urlContexts.first
+        {
+''' + ROUTE + '''            URLHandler.shared.handle(context.url)
+        }'''
+if 'TNBDeepLinkRouter.shared.handle' not in s:
+    if cold_old not in s:
+        sys.stderr.write('FATAL[B1c]: 冷启动 URL 锚点(connectionOptions.urlContexts)未找到\n')
+        sys.exit(2)
+    s = s.replace(cold_old, cold_new, 1)
+
+# 入口 2：热启动 openURLContexts。
+warm_old = '''        guard let context = URLContexts.first else { return }
+        debugLog("[SceneDelegate] scene(_:openURLContexts:) called with URL: \\(context.url)")
+        URLHandler.shared.handle(context.url)'''
+warm_new = '''        guard let context = URLContexts.first else { return }
+        debugLog("[SceneDelegate] scene(_:openURLContexts:) called with URL: \\(context.url)")
+''' + ROUTE + '''        URLHandler.shared.handle(context.url)'''
+if s.count('TNBDeepLinkRouter.shared.handle') < 1:
+    # 若上面 cold 已插入则这里只补 warm（用计数区分）
+    pass
+if warm_old in s and 'TNBDeepLinkRouter.shared.handle' not in warm_old:
+    # 只有当 warm 分支还没有 ROUTE 时插入：定位 warm_old 最后一次出现的 handle
+    # 用更精确的方式：若整体只有 1 处 ROUTE（cold），才给 warm 加。
+    if s.count(ROUTE) == 1:
+        s = s.replace(warm_old, warm_new, 1)
+
+if s != orig:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  SceneDelegate.swift: 已接入 TNBDeepLinkRouter（冷启动 + 热启动两处）')
+else:
+    print('  SceneDelegate.swift: 深链路由已存在（幂等）')
+PY
+  # 硬校验：必须恰好两处接入（冷 + 热）
+  cnt=$(grep -c 'TNBDeepLinkRouter.shared.handle' "$SCENEDELEGATE" || true)
+  if [ "$cnt" -lt 2 ]; then
+    echo "FATAL[B1c]: SceneDelegate 深链路由注入不足（找到 $cnt 处，期望 >=2）" >&2
+    exit 2
+  fi
+  ok "SceneDelegate.swift: 小组件深链已接入（冷/热启动共 $cnt 处），校验通过"
+else
+  echo "FATAL[B1c]: 缺少 $SCENEDELEGATE，无法接入小组件深链" >&2
   exit 2
 fi
 

@@ -119,6 +119,22 @@ if ! grep -q 'setObject:bundleName forKey:@"selected"' "$ENGINE_SRC"; then
   echo "致命错误: launchGuestApp 未写入正确的 selected 键（写成 selectedApp 会导致 guest 永不启动）。" >&2
   exit 1
 fi
+# ★ 小组件深链接入硬校验（2026-11-24 真机 bug）：TNBDeepLinkRouter 必须在
+#   SceneDelegate 冷/热两处 URL 入口被调用，否则点小组件只进 openSSS 界面。
+ROUTER_SRC="upstream/openSSS/AltStore/TreeNB/Routing/TNBDeepLinkRouter.swift"
+SCENE_SRC="upstream/openSSS/AltStore/SceneDelegate.swift"
+if [ -f "$ROUTER_SRC" ] && ! grep -q 'launchGuestApp' "$ROUTER_SRC"; then
+  echo "致命错误: TNBDeepLinkRouter 未直接调用 launchGuestApp，冷启动时通知会丢失。" >&2
+  exit 1
+fi
+if [ -f "$SCENE_SRC" ]; then
+  route_cnt=$(grep -c 'TNBDeepLinkRouter.shared.handle' "$SCENE_SRC" || true)
+  if [ "$route_cnt" -lt 2 ]; then
+    echo "致命错误: SceneDelegate 深链路由注入不足（$route_cnt 处，期望冷/热共>=2），点小组件不会启动 guest。" >&2
+    exit 1
+  fi
+  echo "  小组件深链路由校验通过（SceneDelegate 冷/热共 $route_cnt 处接入）"
+fi
 if ! grep -q 'launchToGuestAppWithClassicMode' "$ENGINE_SRC"; then
   echo "致命错误: launchGuestApp 未委托 LCSharedUtils 重启进程，热调 LiveContainerMain 会闪退。" >&2
   exit 1

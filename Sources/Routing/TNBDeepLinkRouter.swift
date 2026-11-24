@@ -2,27 +2,34 @@
 //  TNBDeepLinkRouter.swift
 //  TreeNB —— 统一深链路由
 //
-//  接入点：openSSS 的 SceneDelegate.onOpenURL / AppDelegate 的 openURL 里调用
+//  接入点：openSSS 的 SceneDelegate 两处 URL 入口里调用
 //      TNBDeepLinkRouter.shared.handle(url: url)
+//    · scene(_:willConnectTo:options:)   —— 冷启动（App 未运行时点小组件）
+//    · scene(_:openURLContexts:)         —— 热启动（App 在后台时点小组件）
+//  这两处由 patch_upstream.sh 自动注入。
 //
 //  支持的 scheme（都在 Info.plist 注册）：
 //    openssai://container-launch?bundle-name=X&container-folder-name=Y   ← 小组件主用
 //    livecontainer://livecontainer-launch?...                           ← 兼容老组件
 //    openssai://import-app          ← 导入 IPA（openSSS 原有 sidestore:// 也透传）
 //
-//  设计：深链不直接启动 guest（那需要 UI 上下文），而是发通知让 Shell 切到容器 Tab，
-//  再由容器 Tab 调 LCEngineEntry.launchGuestApp。这样和 openSSS 现有深链观察者模式一致。
+//  设计要点（2026-11-24 修复）：
+//  以前这里只发通知让容器 Tab 启动 guest，但冷启动时 URL 回调早于 Tab 的
+//  观察者注册，通知直接丢失 → 点小组件只进 openSSS 界面。现在直接在路由里
+//  调 LCEngineEntry.launchGuestApp（它写 selected 键 + 重启进程，不需要 UI 上下文），
+//  冷/热启动都可靠。切 Tab 通知仅保留作 UI 反馈，不再是启动的必要条件。
 //
 
 import Foundation
 import UIKit
+import LiveContainerShared
 
 public final class TNBDeepLinkRouter {
 
     public static let shared = TNBDeepLinkRouter()
     private init() {}
 
-    /// 深链通知名（ShellTabBarController 监听后切到容器 Tab）
+    /// 深链通知名（ShellTabBarController 监听后切到容器 Tab，仅 UI 反馈用）
     public static let switchToContainerTab = Notification.Name("TNBSwitchToContainerTab")
     public static let launchGuest = Notification.Name("TNBDeepLinkLaunchGuest")
     public static let importApp = Notification.Name("TNBDeepLinkImportApp")
@@ -46,16 +53,34 @@ public final class TNBDeepLinkRouter {
         switch host {
         case "container-launch", "livecontainer-launch":
             guard let bundle = query["bundle-name"], !bundle.isEmpty else { return false }
-            var info: [String: Any] = ["bundle-name": bundle]
-            if let container = query["container-folder-name"] {
-                info["container-folder-name"] = container
+            let container = query["container-folder-name"]
+            let launchURL = query["url"]
+            NSLog("[TreeNB] 小组件深链启动 guest: %@ container=%@ url=%@",
+                  bundle, container ?? "(默认)", launchURL ?? "(无)")
+            // 直接调引擎启动（写 selected + 重启进程），不依赖 UI 观察者。
+            // 成功时本进程随即被 SIGKILL，由 main.swift 冷启动接管进 guest。
+            let engine = LCEngineEntry.shared()
+            var err: NSError?
+            var ok = false
+            do {
+                try engine.launchGuestApp(bundle,
+                                          containerFolder: container,
+                                          launchURL: launchURL,
+                                          classicMode: 0)
+                ok = true
+            } catch {
+                err = error as NSError
             }
-            if let launchURL = query["url"] {
-                info["launch-url"] = launchURL
+            if !ok {
+                // 启动失败原因透传到容器页展示，别静默停在这里。
+                UserDefaults.standard.set(
+                    err?.localizedDescription ?? "小组件启动应用失败，请打开树应用容器页重试",
+                    forKey: "TNBLastGuestLaunchError")
+                NSLog("[TreeNB] 小组件启动 guest 失败: %@", err?.localizedDescription ?? "未知")
             }
+            // UI 反馈：切到容器 Tab（若 UI 已就绪）；冷启动时该通知可能无人接，无妨。
             NotificationCenter.default.post(name: Self.switchToContainerTab, object: nil)
-            NotificationCenter.default.post(name: Self.launchGuest, object: nil, userInfo: info)
-            return true
+            return ok
 
         case "import-app", "import":
             NotificationCenter.default.post(name: Self.switchToContainerTab, object: nil)
@@ -72,7 +97,7 @@ public final class TNBDeepLinkRouter {
 // MARK: - Shell 接入辅助（给 ShellTabBarController 用）
 
 public extension TNBDeepLinkRouter {
-    /// 在 ShellTabBarController.viewDidLoad 里调用，自动切 Tab + 触发 guest 启动
+    /// 在 ShellTabBarController.viewDidLoad 里调用，自动切 Tab（仅 UI 反馈）。
     static func installShellObserver(_ shell: UITabBarController, containerTabIndex: Int) {
         let center = NotificationCenter.default
         // 弱引用 shell，避免循环
