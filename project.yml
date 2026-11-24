@@ -460,6 +460,8 @@ targets:
       - sdk: CoreVideo.framework
       - sdk: Accelerate.framework
       - sdk: Security.framework
+      # husk-tl-dvm-sensors.m 用 CMMotionManager（Android 传感器 shim）
+      - sdk: CoreMotion.framework
       - sdk: libz.tbd
       - sdk: libresolv.tbd
       - sdk: libsqlite3.tbd
