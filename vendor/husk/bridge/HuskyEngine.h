@@ -28,7 +28,9 @@ typedef NS_ENUM(NSInteger, HuskyState) {
 
 @interface HuskyEngine : NSObject
 
-+ (instancetype)shared;
+/// 声明为 class property，Swift 侧导入为 `HuskyEngine.shared`（属性），
+/// 与 `.state` / `.loadedAPK` 的 getter 风格保持一致。
+@property (class, readonly, strong) HuskyEngine *shared;
 
 /// 扫描一个或多个 APK（分拆包按主包在前传入），返回 husk_tl_scan 的 JSON 字符串。
 /// JSON 含 engine / abis / dexCount / libraries 等字段，Swift 侧据此判断能否运行。
@@ -57,8 +59,9 @@ typedef NS_ENUM(NSInteger, HuskyState) {
             caPath:(NSString *)caPath;
 
 /// 当前状态 / 已加载的 APK 路径（无则 nil）。
-- (HuskyState)state;
-- (nullable NSString *)loadedAPK;
+/// 声明为 readonly property，Swift 侧导入为 `.state` / `.loadedAPK` 属性。
+@property (readonly) HuskyState state;
+@property (readonly, nullable) NSString *loadedAPK;
 
 /// 触控：phase 0=down 1=move 2=up 3=cancel，id 为指针 id。
 - (void)touch:(int)phase pointer:(int)pid x:(float)x y:(float)y;

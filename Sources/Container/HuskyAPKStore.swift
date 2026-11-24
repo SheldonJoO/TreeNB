@@ -113,7 +113,7 @@ final class HuskyAPKStore: ObservableObject {
     func reload() {
         var result: [HuskyApp] = []
         let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-        for dir in dirs where dir.isDirectory {
+        for dir in dirs where dir.isDir {
             let apks = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
                 .filter { $0.pathExtension.lowercased() == "apk" }
                 .sorted { a, b in
@@ -157,6 +157,9 @@ final class HuskyAPKStore: ObservableObject {
 }
 
 private extension URL {
+    var isDir: Bool {
+        (try? resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+    }
     var fileSize: Int {
         (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
     }

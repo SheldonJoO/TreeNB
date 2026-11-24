@@ -68,11 +68,11 @@ final class HuskyGameView: UIView {
     private func launch() {
         let engineObj = HuskyEngine.shared
         // 已经在跑同一个游戏则直接恢复。
-        if engineObj.state == HuskyStateRunning, engineObj.loadedAPK == apk {
+        if engineObj.state == HuskyState.running, engineObj.loadedAPK == apk {
             engineObj.setPaused(false)
             return
         }
-        if engineObj.state != HuskyStateIdle {
+        if engineObj.state != HuskyState.idle {
             engineObj.unload()
         }
 
@@ -87,7 +87,7 @@ final class HuskyGameView: UIView {
         let frameworks = bundle.privateFrameworksPath ?? ""
         let cache = docs.appendingPathComponent("HuskyJITless", isDirectory: true).path
         try? FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
-        engineObj.prepareJITLessWithAOTDirectories([frameworks, cache])
+        engineObj.prepareJITLess(withAOTDirectories: [frameworks, cache])
 
         for extra in extraApks.prefix(3) { engineObj.addPackage(extra) }
 

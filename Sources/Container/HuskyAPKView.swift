@@ -19,60 +19,11 @@ struct HuskyAPKView: View {
     var body: some View {
         List {
             if store.apps.isEmpty {
-                Section {
-                    VStack(spacing: 10) {
-                        Image(systemName: "hammer.fill")
-                            .font(.system(size: 36))
-                            .foregroundColor(.secondary)
-                        Text("还没有安卓应用")
-                            .font(.headline)
-                        Text("点右上角 + 导入 APK。支持 Unity / Godot / cocos 等引擎游戏。")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 30)
-                }
+                EmptyAppsSection()
             } else {
-                Section {
-                    ForEach(store.apps) { app in
-                        HStack(spacing: 12) {
-                            Image(systemName: app.supported ? "gamecontroller.fill" : "questionmark.circle")
-                                .font(.title3)
-                                .foregroundColor(app.supported ? .accentColor : .secondary)
-                                .frame(width: 30)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(app.label).font(.body).lineLimit(1)
-                                Text("\(app.engine) · \(app.detail)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(2)
-                            }
-                            Spacer()
-                            if app.supported {
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if app.supported { running = app }
-                            else { message = "这个 APK 当前无法运行：\(app.detail)" }
-                        }
-                    }
-                    .onDelete { indexSet in
-                        for i in indexSet { store.remove(store.apps[i]) }
-                    }
-                }
+                appsSection
             }
-
-            Section {
-                Text("翻译层在设备本地运行 APK，不需要安卓系统镜像。游戏画面由 ANGLE 渲染；三指点击返回列表。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            infoSection
         }
         .navigationTitle("安卓应用")
         .navigationBarTitleDisplayMode(.inline)
@@ -84,29 +35,111 @@ struct HuskyAPKView: View {
             }
         }
         .sheet(isPresented: $showPicker) {
-            APKDocumentPicker { urls in
-                let count = urls.filter { $0.pathExtension.lowercased() == "apk" }.count
-                if count > 0 {
-                    store.reload()
-                    message = "已导入 \(count) 个 APK"
-                } else {
-                    message = "没有选择 APK 文件"
-                }
-            }
+            APKDocumentPicker { handlePicked($0) }
         }
         .fullScreenCover(item: $running) { app in
             HuskyGameScreen(app: app) { running = nil }
         }
-        .alert(item: Binding(
-            get: { message.map { MessageWrapper(text: $0) } },
-            set: { _ in message = nil }
-        )) { wrapper in
+        .alert(item: alertBinding) { wrapper in
             Alert(title: Text("提示"), message: Text(wrapper.text), dismissButton: .default(Text("好")))
         }
         .onAppear { store.reload() }
     }
 
+    // MARK: - 拆分子表达式（避免 body 类型检查超时）
+
+    private var appsSection: some View {
+        Section {
+            ForEach(store.apps) { app in
+                AppRow(app: app) {
+                    if app.supported {
+                        running = app
+                    } else {
+                        message = "这个 APK 当前无法运行：\(app.detail)"
+                    }
+                }
+            }
+            .onDelete { indexSet in
+                for i in indexSet { store.remove(store.apps[i]) }
+            }
+        }
+    }
+
+    private var infoSection: some View {
+        Section {
+            Text("翻译层在设备本地运行 APK，不需要安卓系统镜像。游戏画面由 ANGLE 渲染；三指点击返回列表。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var alertBinding: Binding<MessageWrapper?> {
+        Binding(
+            get: { message.map { MessageWrapper(text: $0) } },
+            set: { _ in message = nil }
+        )
+    }
+
+    private func handlePicked(_ urls: [URL]) {
+        let count = urls.filter { $0.pathExtension.lowercased() == "apk" }.count
+        if count > 0 {
+            store.reload()
+            message = "已导入 \(count) 个 APK"
+        } else {
+            message = "没有选择 APK 文件"
+        }
+    }
+
     private struct MessageWrapper: Identifiable { let text: String; var id: String { text } }
+
+    private struct EmptyAppsSection: View {
+        var body: some View {
+            Section {
+                VStack(spacing: 10) {
+                    Image(systemName: "hammer.fill")
+                        .font(.system(size: 36))
+                        .foregroundColor(.secondary)
+                    Text("还没有安卓应用")
+                        .font(.headline)
+                    Text("点右上角 + 导入 APK。支持 Unity / Godot / cocos 等引擎游戏。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 30)
+            }
+        }
+    }
+
+    private struct AppRow: View {
+        let app: HuskyApp
+        let tap: () -> Void
+
+        var body: some View {
+            HStack(spacing: 12) {
+                Image(systemName: app.supported ? "gamecontroller.fill" : "questionmark.circle")
+                    .font(.title3)
+                    .foregroundColor(app.supported ? .accentColor : .secondary)
+                    .frame(width: 30)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(app.label).font(.body).lineLimit(1)
+                    Text("\(app.engine) · \(app.detail)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                if app.supported {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: tap)
+        }
+    }
 }
 
 /// 全屏游戏容器：UIKit 包装 HuskyGameView，三指点击关闭。
