@@ -29,7 +29,7 @@ struct HuskyAPKView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button { showPicker = true } label: {
+                SwiftUI.Button { showPicker = true } label: {
                     Image(systemName: "plus")
                 }
             }
