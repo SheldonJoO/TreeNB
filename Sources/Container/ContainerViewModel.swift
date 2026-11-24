@@ -94,7 +94,10 @@ final class ContainerViewModel: ObservableObject {
         var err: NSError?
         var ok = false
         do {
-            ok = try engine.uninstallGuest(bundle)
+            // NSError** → Swift throws 后 BOOL 返回值被丢弃（成功=不抛异常），
+            // 不能写 ok = try ...（会报 cannot assign () to Bool）。
+            try engine.uninstallGuest(bundle)
+            ok = true
         } catch {
             err = error as NSError
         }
