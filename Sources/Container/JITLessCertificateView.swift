@@ -118,7 +118,11 @@ struct JITLessCertificateView: View {
     /// 避免手动导文件时 team 对不上导致的 code signature invalid。
     private func resetToCurrentAccountCertificate() {
         // CertificateManager 与主 App 同 target（TreeNB module），无需 import。
-        guard let active = CertificateManager.shared.activeCertificate else {
+        // 冷启动时 shared.init 的 loadActiveCertificate 用 try? 可能静默失败，
+        // 对齐上游 AccountVerificationRow 的兜底：内存没有就再主动从 Keychain 读一次。
+        let cm = CertificateManager.shared
+        let active = cm.activeCertificate ?? (try? cm.loadActiveCertificate())
+        guard let active else {
             message = "当前没有账号证书。请先在「我的」页登录 Apple ID，并用它成功侧载过 App，再回来重置。"
             showMessage = true
             return
