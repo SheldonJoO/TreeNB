@@ -1073,6 +1073,36 @@ else
   warn "未找到 $LOCVIEW，跳过虚拟定位文案检查"
 fi
 
+# B1i. 定位状态文案修正：connected 只表示 DVT 会话是否存在，不表示设备链路断开。
+#      首次进入页面尚未开始模拟时 connected == false，旧代码显示「连接失败」，
+#      把「未开始」误报成故障。这里统一改为「未开始」。
+if [ -f "$LOCVIEW" ]; then
+  python3 - "$LOCVIEW" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '''        if !status.connected
+        {
+            return NSLocalizedString("Connection Failed", comment: "")
+        }
+        return NSLocalizedString("Not Started", comment: "")'''
+new = '''        // connected 只表示本地 DVT 定位会话是否存在（未开始 / 已停止时为 false），
+        // 不代表设备链路断开；旧文案把空闲状态误报成「连接失败」。
+        return NSLocalizedString("Not Started", comment: "")'''
+if old in s:
+    s = s.replace(old, new)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  定位状态文案：空闲不再误报「连接失败」')
+elif '旧文案把空闲状态误报成' in s:
+    print('  定位状态文案已是新版本（无需改）')
+else:
+    raise SystemExit('FATAL[B1i]: 未定位到 statusText 的 Connection Failed 分支')
+PY
+  grep -q '旧文案把空闲状态误报成' "$LOCVIEW" \
+    || { echo "FATAL[B1i]: 定位状态文案修正失败" >&2; exit 2; }
+  ok "定位空闲状态文案已校验（未开始，不再误报连接失败）"
+fi
+
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
 # 现象：点小组件里的容器 App，只进 openSSS 界面，不启动对应 guest。
