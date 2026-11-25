@@ -289,6 +289,18 @@ private struct GuestTile: View {
                     .foregroundStyle(.primary)
             }
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 6)
+            // iOS27 玻璃拟态：宫格 tile 用超薄材质 + 高光描边（iOS15+ 兼容）。
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.6)
+                    )
+                    .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 3)
+            )
         }
         .buttonStyle(.plain)
         .task {

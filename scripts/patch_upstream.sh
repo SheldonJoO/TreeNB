@@ -1141,4 +1141,84 @@ grep -rl "com.kdt.livecontainer.treeWidget" "$LC/TreeWidget" 2>/dev/null | while
 done
 ok "Widget Keychain service 已归一为 com.openssai.app.treeWidget"
 
+# ---------------------------------------------------------------------------
+# E1. 全 App 玻璃拟态（iOS 26+ Liquid Glass / 低版本系统毛玻璃回退）
+# ---------------------------------------------------------------------------
+# 只改控件层（导航栏/Tab 栏），符合 HIG——Liquid Glass 不进内容层。
+# 关键：iOS 26+ 上 UINavigationBarAppearance.configureWithDefaultBackground()
+# + 透明背景会自动获得系统 Liquid Glass；不透明背景（原 configureWithOpaqueBackground
+# + ShellTheme.background）正是遮住玻璃的元凶，故去掉。低版本回退为系统默认毛玻璃。
+# 用 marker 幂等，锚点精确匹配，找不到直接 FATAL（不静默失败）。
+log "E1. 全 App 玻璃拟态（导航栏 + Tab 栏）"
+SHELL_GLASS="$SSS/AltStore/Shell/ShellTabBarController.swift"
+if [ -f "$SHELL_GLASS" ]; then
+  python3 - "$SHELL_GLASS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+orig = s
+changes = []
+
+# 1) 导航栏：去掉不透明黑背景，改默认背景（iOS26+ 自动 Liquid Glass）
+a_nav = '''        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = ShellTheme.background
+        appearance.shadowColor = .clear
+'''
+b_nav = '''        let appearance = UINavigationBarAppearance()
+        // TREENB_GLASS_THEME: iOS26+ 自动 Liquid Glass，低版本系统默认毛玻璃。
+        appearance.configureWithDefaultBackground()
+        appearance.backgroundColor = nil
+        appearance.shadowColor = .clear
+'''
+if 'TREENB_GLASS_THEME' not in s:
+    if a_nav not in s:
+        sys.stderr.write('FATAL[Glass]: 导航栏背景锚点未找到，上游结构已变\n')
+        sys.exit(2)
+    s = s.replace(a_nav, b_nav, 1)
+    changes.append('导航栏玻璃')
+
+    # 2) Tab 栏：在 viewDidLoad 的 tabBar.tintColor 后注入玻璃 appearance
+    a_tab = '''        tabBar.tintColor = ShellTheme.accentColor
+
+        NotificationCenter.default.addObserver(
+'''
+    b_tab = '''        tabBar.tintColor = ShellTheme.accentColor
+
+        // TREENB_GLASS_THEME: 系统 Tab 栏玻璃材质（iOS26+ Liquid Glass 自动生效）。
+        if #available(iOS 15.0, *) {
+            let tabAppearance = UITabBarAppearance()
+            tabAppearance.configureWithDefaultBackground()
+            tabAppearance.backgroundColor = nil
+            tabAppearance.shadowColor = .clear
+            tabBar.standardAppearance = tabAppearance
+            if #available(iOS 15.0, *) {
+                tabBar.scrollEdgeAppearance = tabAppearance
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+'''
+    if a_tab not in s:
+        sys.stderr.write('FATAL[Glass]: Tab 栏 tintColor 锚点未找到\n')
+        sys.exit(3)
+    s = s.replace(a_tab, b_tab, 1)
+    changes.append('Tab 栏玻璃')
+
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  ShellTabBarController.swift: ' + '；'.join(changes))
+else:
+    print('  ShellTabBarController.swift: 已含 TREENB_GLASS_THEME，跳过')
+PY
+  # 硬校验：marker 必须落地，且不透明背景必须已移除（导航栏函数内）
+  grep -q 'TREENB_GLASS_THEME' "$SHELL_GLASS" \
+    || { echo "FATAL[Glass]: 玻璃主题 marker 未注入" >&2; exit 4; }
+  if grep -q 'appearance.configureWithOpaqueBackground()' "$SHELL_GLASS"; then
+    echo "FATAL[Glass]: 导航栏仍为不透明背景，玻璃化失败" >&2; exit 5
+  fi
+  ok "全 App 玻璃主题已注入（导航栏 + Tab 栏）"
+else
+  warn "ShellTabBarController.swift 未找到，跳过玻璃主题"
+fi
+
 log "✅ 全部补丁执行完毕。下一步：xcodegen generate && 真机 Spike（docs/启动链改造设计.md §5）"
