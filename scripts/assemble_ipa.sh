@@ -524,6 +524,31 @@ if ! grep -q 'org.android.package-archive' project.yml; then
 fi
 echo "  Husk 翻译层校验通过（framework + ANGLE + 证书 + 加号入口 + APK 文档类型）"
 
+echo "==> [1.9/4] 校验全 App 玻璃与时间戳版本号"
+if ! grep -q 'systemUltraThinMaterial' Sources/Container/GlassChrome.swift; then
+  echo "致命错误: GlassChrome.swift 缺少 systemUltraThinMaterial，真机不会有玻璃效果。" >&2
+  exit 1
+fi
+if ! grep -q 'GlassChrome.install()' upstream/openSSS/AltStore/main.swift; then
+  echo "致命错误: main.swift 未安装 GlassChrome，导航栏/Tab 栏玻璃不会生效。" >&2
+  exit 1
+fi
+if ! strings "$APP/$MAIN_EXE" | grep -q 'tnbGlassNavLayout'; then
+  echo "致命错误: 主二进制缺少 tnbGlassNavLayout selector，玻璃 swizzler 未编入。" >&2
+  exit 1
+fi
+SHORT_VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist" 2>/dev/null || true)
+BUILD_VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist" 2>/dev/null || true)
+if ! echo "$SHORT_VER" | grep -Eq '^1\.0\.[0-9]{6}$'; then
+  echo "致命错误: CFBundleShortVersionString=[$SHORT_VER] 不是 1.0.YYMMDD 时间戳格式。" >&2
+  exit 1
+fi
+if ! echo "$BUILD_VER" | grep -Eq '^[0-9]{12}$'; then
+  echo "致命错误: CFBundleVersion=[$BUILD_VER] 不是 YYYYMMDDHHMM 时间戳格式。" >&2
+  exit 1
+fi
+echo "  全 App 玻璃 + 时间戳版本号校验通过（$SHORT_VER / $BUILD_VER）"
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 

@@ -35,6 +35,43 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# A0.1 AppLogo：关于页 / 启动页/Widget 兜底用的图片资源。
+# 上游 AppLogo 是 openSSS 的 "oS" 图标，用户要求换成同一张电路树图。
+# ---------------------------------------------------------------------------
+log "A0.1 铺 TreeNB AppLogo（关于页 + 启动页）"
+APPLOGO="$SSS/AltStore/Resources/Assets.xcassets/AppLogo.imageset"
+WIDGET_APPLOGO="$SSS/AltWidget/Assets.xcassets/AppLogo.imageset"
+if [ -d "$ROOT/config/AppLogo" ] && [ -d "$APPLOGO" ]; then
+  cp "$ROOT/config/AppLogo/"*.png "$APPLOGO/"
+  [ -d "$WIDGET_APPLOGO" ] && cp "$ROOT/config/AppLogo/"*.png "$WIDGET_APPLOGO/"
+  ok "AppLogo 已铺（$(ls "$ROOT/config/AppLogo/"*.png | wc -l | tr -d ' ') 个尺寸，主 App + Widget）"
+else
+  echo "FATAL[A0.1]: 缺少 config/AppLogo 或上游 AppLogo.imageset" >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# A0.2 版本号按构建时间戳递增。
+# 用户约定：短版本 1.0.YYMMDD（如 1.0.261125），构建号 YYYYMMDDHHMM。
+# 直接写进 Info.plist，避免依赖 xcodebuild 命令行覆盖（会冲掉 target 级设置）。
+# ---------------------------------------------------------------------------
+log "A0.2 写入时间戳版本号"
+TNB_STAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
+TNB_SHORT="1.0.${TNB_STAMP:2:6}"
+python3 - "$ROOT/config/TreeNB-Info.plist" "$ROOT/config/AltWidget-Info.plist" "$TNB_SHORT" "$TNB_STAMP" <<'PY'
+import re, sys
+short, build = sys.argv[3], sys.argv[4]
+for path in sys.argv[1:3]:
+    s = open(path, encoding='utf-8').read()
+    s = re.sub(r'(<key>CFBundleShortVersionString</key>\s*<string>).*?(</string>)',
+               lambda m: m.group(1) + short + m.group(2), s, count=1)
+    s = re.sub(r'(<key>CFBundleVersion</key>\s*<string>).*?(</string>)',
+               lambda m: m.group(1) + build + m.group(2), s, count=1)
+    open(path, 'w', encoding='utf-8').write(s)
+PY
+ok "版本号已写：$TNB_SHORT ($TNB_STAMP)"
+
+# ---------------------------------------------------------------------------
 # A. TreeNewBee 侧：删除 openSSS-as-guest 的跳转分支
 # ---------------------------------------------------------------------------
 log "A. 删除 LC 侧的 openSSS 跳转分支"
@@ -1142,12 +1179,13 @@ done
 ok "Widget Keychain service 已归一为 com.openssai.app.treeWidget"
 
 # ---------------------------------------------------------------------------
-# E1. 全 App 玻璃拟态（iOS 26+ Liquid Glass / 低版本系统毛玻璃回退）
+# E1. 全 App 液态玻璃（导航栏 + Tab 栏）
 # ---------------------------------------------------------------------------
-# 只改控件层（导航栏/Tab 栏），符合 HIG——Liquid Glass 不进内容层。
-# 关键：iOS 26+ 上 UINavigationBarAppearance.configureWithDefaultBackground()
-# + 透明背景会自动获得系统 Liquid Glass；不透明背景（原 configureWithOpaqueBackground
-# + ShellTheme.background）正是遮住玻璃的元凶，故去掉。低版本回退为系统默认毛玻璃。
+# 只改控件层，符合 HIG——玻璃不进内容层。
+# 关键：CI 用 Xcode 16.4 / iOS18.5 SDK，iOS26+ 的系统 Liquid Glass 只对
+# iOS26 SDK 构建的 App 自动生效，旧 SDK 上 configureWithDefaultBackground
+# 仍是不透明背景。故改为：appearance 全透明 + GlassChrome 直接挂
+# UIVisualEffectView(.systemUltraThinMaterial)，iOS15~27 表现一致。
 # 用 marker 幂等，锚点精确匹配，找不到直接 FATAL（不静默失败）。
 log "E1. 全 App 玻璃拟态（导航栏 + Tab 栏）"
 SHELL_GLASS="$SSS/AltStore/Shell/ShellTabBarController.swift"
@@ -1166,9 +1204,12 @@ a_nav = '''        let appearance = UINavigationBarAppearance()
         appearance.shadowColor = .clear
 '''
 b_nav = '''        let appearance = UINavigationBarAppearance()
-        // TREENB_GLASS_THEME: iOS26+ 自动 Liquid Glass，低版本系统默认毛玻璃。
-        appearance.configureWithDefaultBackground()
-        appearance.backgroundColor = nil
+        // TREENB_GLASS_THEME: 系统背景清空，由 GlassChrome 挂的
+        // UIVisualEffectView(.systemUltraThinMaterial) 提供全版本一致的玻璃。
+        appearance.configureWithTransparentBackground()
+        appearance.backgroundColor = .clear
+        appearance.backgroundImage = UIImage()
+        appearance.shadowImage = UIImage()
         appearance.shadowColor = .clear
 '''
 if 'TREENB_GLASS_THEME' not in s:
@@ -1185,17 +1226,20 @@ if 'TREENB_GLASS_THEME' not in s:
 '''
     b_tab = '''        tabBar.tintColor = ShellTheme.accentColor
 
-        // TREENB_GLASS_THEME: 系统 Tab 栏玻璃材质（iOS26+ Liquid Glass 自动生效）。
+        // TREENB_GLASS_THEME: 清掉系统不透明背景；毛玻璃由 GlassChrome 挂载。
         if #available(iOS 15.0, *) {
             let tabAppearance = UITabBarAppearance()
-            tabAppearance.configureWithDefaultBackground()
-            tabAppearance.backgroundColor = nil
+            tabAppearance.configureWithTransparentBackground()
+            tabAppearance.backgroundColor = .clear
+            tabAppearance.backgroundImage = UIImage()
+            tabAppearance.shadowImage = UIImage()
             tabAppearance.shadowColor = .clear
             tabBar.standardAppearance = tabAppearance
-            if #available(iOS 15.0, *) {
-                tabBar.scrollEdgeAppearance = tabAppearance
-            }
+            tabBar.scrollEdgeAppearance = tabAppearance
         }
+        tabBar.isTranslucent = true
+        tabBar.backgroundImage = UIImage()
+        tabBar.shadowImage = UIImage()
 
         NotificationCenter.default.addObserver(
 '''
@@ -1219,6 +1263,33 @@ PY
   ok "全 App 玻璃主题已注入（导航栏 + Tab 栏）"
 else
   warn "ShellTabBarController.swift 未找到，跳过玻璃主题"
+fi
+
+# E1.2 进程入口安装玻璃 swizzler（覆盖模态导航控制器等所有 bar）。
+log "E1.2 进程入口安装 GlassChrome"
+MAIN_GLASS="$SSS/AltStore/main.swift"
+if [ -f "$MAIN_GLASS" ]; then
+  python3 - "$MAIN_GLASS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'GlassChrome.install()' not in s:
+    anchor = 'UIApplicationMain(\n'
+    if anchor not in s:
+        sys.stderr.write('FATAL[Glass]: main.swift 缺少 UIApplicationMain 锚点\n')
+        sys.exit(6)
+    s = s.replace(anchor, 'GlassChrome.install()\n\n' + anchor, 1)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  main.swift: 已注入 GlassChrome.install()')
+else:
+    print('  main.swift: GlassChrome.install() 已存在')
+PY
+  grep -q 'GlassChrome.install()' "$MAIN_GLASS" \
+    || { echo "FATAL[Glass]: GlassChrome.install() 未注入 main.swift" >&2; exit 7; }
+  ok "GlassChrome 已挂到进程入口"
+else
+  echo "FATAL[Glass]: 缺少 $MAIN_GLASS" >&2
+  exit 8
 fi
 
 log "✅ 全部补丁执行完毕。下一步：xcodegen generate && 真机 Spike（docs/启动链改造设计.md §5）"
