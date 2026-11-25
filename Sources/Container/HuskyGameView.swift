@@ -25,6 +25,9 @@ final class HuskyGameView: UIView {
 
     /// 退出游戏（三指点击）回调。
     var onExitRequested: (() -> Void)?
+    /// 启动前的准备/失败提示（AOT 转换可能耗时或在无证书时失败）。
+    var onStatus: ((String) -> Void)?
+    var onReady: (() -> Void)?
 
     init(apk: String, engine: String, dataDir: String, extraApks: [String] = [], scale: CGFloat = 2) {
         self.apk = apk
@@ -70,6 +73,7 @@ final class HuskyGameView: UIView {
         // 已经在跑同一个游戏则直接恢复。
         if engineObj.state == HuskyState.running, engineObj.loadedAPK == apk {
             engineObj.setPaused(false)
+            onReady?()
             return
         }
         if engineObj.state != HuskyState.idle {
@@ -85,22 +89,48 @@ final class HuskyGameView: UIView {
 
         let bundle = Bundle.main
         let frameworks = bundle.privateFrameworksPath ?? ""
-        let cache = docs.appendingPathComponent("HuskyJITless", isDirectory: true).path
-        try? FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+        let store = HuskyAPKStore.shared
+        let cache = store.aotCacheDir()
         engineObj.prepareJITLess(withAOTDirectories: [frameworks, cache])
 
-        for extra in extraApks.prefix(3) { engineObj.addPackage(extra) }
+        // AOT 转换 + 签名可能耗时（每个 arm64 .so 都要转 Mach-O 并用 p12 签），
+        // 必须在后台做，避免卡住主线程。转换完再回主线程启动引擎。
+        // 先把需要的实例属性捕获成局部值，闭包里就不用隐式 self（避免 weak/隐式捕获冲突）。
+        let apkPath = self.apk
+        let gameEngine = self.engine
+        let gameDataDir = self.dataDir
+        let extras = self.extraApks
+        let renderScale = self.scale
+        let size = self.bounds.size
+        let allAPKs = [apkPath] + extras
+        onStatus?("正在准备运行环境（转换原生库）…")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = store.prepareAOT(apkPaths: allAPKs)
+            let warning = result.error
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if result.ready < 0 {
+                    // 转换彻底失败：没有可执行内存，游戏必定起不来，别盲目 launch。
+                    self.onStatus?(warning ?? "原生库转换失败，无法启动")
+                    return
+                }
+                if let warning { self.onStatus?(warning) }
 
-        let angle = bundle.path(forResource: "libANGLE-shared", ofType: "dylib")
-            ?? (frameworks as NSString).appendingPathComponent("libANGLE-shared.dylib")
-        let ca = bundle.path(forResource: "cacert", ofType: "pem") ?? ""
+                for extra in extras.prefix(3) { engineObj.addPackage(extra) }
 
-        let w = Int32(bounds.width * scale)
-        let h = Int32(bounds.height * scale)
-        let layerPtr = Unmanaged.passUnretained(self.layer).toOpaque()
-        _ = engineObj.launchAPK(apk, engine: engine, dataDir: dataDir,
-                                metalLayer: layerPtr, width: w, height: h,
-                                anglePath: angle, caPath: ca)
+                let angle = bundle.path(forResource: "libANGLE-shared", ofType: "dylib")
+                    ?? (frameworks as NSString).appendingPathComponent("libANGLE-shared.dylib")
+                let ca = bundle.path(forResource: "cacert", ofType: "pem") ?? ""
+
+                let w = Int32(size.width * renderScale)
+                let h = Int32(size.height * renderScale)
+                let layerPtr = Unmanaged.passUnretained(self.layer).toOpaque()
+                _ = engineObj.launchAPK(apkPath, engine: gameEngine, dataDir: gameDataDir,
+                                        metalLayer: layerPtr, width: w, height: h,
+                                        anglePath: angle, caPath: ca)
+                self.onReady?()
+            }
+        }
     }
 
     func pause() { HuskyEngine.shared.setPaused(true) }

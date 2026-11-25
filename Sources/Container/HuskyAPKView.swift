@@ -253,6 +253,19 @@ private final class HuskyGameHostVC: UIViewController {
     var app: HuskyApp?
     var onClose: (() -> Void)?
     private var gameView: HuskyGameView?
+    private let statusLabel: UILabel = {
+        let l = UILabel()
+        l.textColor = .white
+        l.font = .systemFont(ofSize: 14, weight: .medium)
+        l.numberOfLines = 0
+        l.textAlignment = .center
+        l.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        l.layer.cornerRadius = 10
+        l.layer.masksToBounds = true
+        l.isHidden = true
+        l.translatesAutoresizingMaskIntoConstraints = false
+        return l
+    }()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -265,6 +278,8 @@ private final class HuskyGameHostVC: UIViewController {
                                extraApks: Array(app.apks.dropFirst()))
         gv.translatesAutoresizingMaskIntoConstraints = false
         gv.onExitRequested = { [weak self] in self?.onClose?() }
+        gv.onStatus = { [weak self] text in self?.showStatus(text) }
+        gv.onReady = { [weak self] in self?.hideStatusSoon() }
         view.addSubview(gv)
         NSLayoutConstraint.activate([
             gv.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -273,6 +288,30 @@ private final class HuskyGameHostVC: UIViewController {
             gv.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         gameView = gv
+
+        view.addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            statusLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 32),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -32)
+        ])
+    }
+
+    private func showStatus(_ text: String) {
+        statusLabel.text = "  \(text)  "
+        statusLabel.isHidden = false
+        UIView.animate(withDuration: 0.15) { self.statusLabel.layoutIfNeeded() }
+    }
+
+    private func hideStatusSoon() {
+        // 成功启动后短暂显示，再淡出；失败提示（无 onReady）则一直留着。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            UIView.animate(withDuration: 0.3, animations: { self?.statusLabel.alpha = 0 }) { _ in
+                self?.statusLabel.isHidden = true
+                self?.statusLabel.alpha = 1
+            }
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {

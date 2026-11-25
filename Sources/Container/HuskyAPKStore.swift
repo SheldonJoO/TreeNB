@@ -150,6 +150,42 @@ final class HuskyAPKStore: ObservableObject {
             .appendingPathComponent("data", isDirectory: true).path
     }
 
+    /// JIT-less AOT 缓存目录：APK 里的 arm64 .so 转成签名 dylib 后放这里。
+    func aotCacheDir() -> String {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("HuskyJITless", isDirectory: true).path
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// 用当前账号的开发者证书，把 APK 里的 arm64 .so 转成签名 dylib（JIT-less 前提）。
+    /// 必须在 launch 前调用。返回 (准备好的库数量, 错误信息)；库数量为 0 且 APK
+    /// 本就没有 .so 时也算成功（纯 DEX 不走原生库），由调用方结合引擎判断。
+    func prepareAOT(apkPaths: [String]) -> (ready: Int, error: String?) {
+        // 主 App 的签名证书：与侧载 TreeNB 用的是同一张，team 天然匹配。
+        let cm = CertificateManager.shared
+        let active = cm.activeCertificate ?? (try? cm.loadActiveCertificate())
+        guard let active, !active.p12Data.isEmpty else {
+            return (0, "没有可用的签名证书。请先到「我的 → 证书」重置为当前账号证书。")
+        }
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.openssai.app"
+        var err: NSString? = nil
+        let ready = HuskyEngine.shared.prepareAOTForAPKs(
+            apkPaths,
+            cacheDir: aotCacheDir(),
+            p12: active.p12Data,
+            password: active.password ?? "",
+            certTag: active.serialNumber,
+            signIdent: bundleID,
+            error: &err)
+        if ready < 0 {
+            return (0, err as String? ?? "AOT 转换失败")
+        }
+        // 证书链提取失败时 err 会是警告（ready >= 0），透传给 UI 提示。
+        let warning = (err as String?) ?? ""
+        return (ready, warning.isEmpty ? nil : warning)
+    }
+
     func remove(_ app: HuskyApp) {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(app.id))
         reload()

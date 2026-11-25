@@ -40,6 +40,19 @@ typedef NS_ENUM(NSInteger, HuskyState) {
 /// 证书转换本身由 Swift 侧复用树 App 的 p12 链路完成后，把目录传进来。
 - (void)prepareJITLessWithAOTDirectories:(NSArray<NSString *> *)dirs;
 
+/// JIT-less 核心：把每个 APK 里的 arm64 .so 转成用证书签名的 Mach-O dylib，
+/// 放进 cacheDir。必须在 launch 前调用（Swift 侧用当前账号 p12 传入）。
+/// certTag 用证书序列号，证书变了才重签；signIdent 必须用主 App 的 bundle ID。
+/// 内部会先从主可执行文件提取证书链（iOS 信任 dylib 的前提）。
+/// 返回准备好（已转换+签名）的库数量；-1 表示整体失败，原因写入 error 输出参数。
+- (int)prepareAOTForAPKs:(NSArray<NSString *> *)apkPaths
+                cacheDir:(NSString *)cacheDir
+                     p12:(NSData *)p12Data
+                password:(NSString *)password
+                 certTag:(NSString *)certTag
+               signIdent:(NSString *)signIdent
+                   error:(NSString * _Nullable __autoreleasing * _Nullable)error;
+
 /// 设置游戏可见的共享存储目录（/sdcard）。
 - (void)setSharedStorageDirectory:(NSString *)dir;
 

@@ -522,7 +522,21 @@ if ! grep -q 'org.android.package-archive' project.yml; then
   echo "致命错误: project.yml 未声明 .apk 文档类型，文件选择器选不了 APK。" >&2
   exit 1
 fi
-echo "  Husk 翻译层校验通过（framework + ANGLE + 证书 + 加号入口 + APK 文档类型）"
+# JIT-less AOT 链路：bridge 必须暴露转换 API，Swift 必须在 launch 前调用，
+# 否则 APK 里的 .so 无法转成签名 dylib，游戏会全部卡在加载原生库（黑屏）。
+if ! grep -q 'prepareAOTForAPKs' vendor/husk/bridge/HuskyEngine.m; then
+  echo "致命错误: HuskyEngine.m 缺少 prepareAOTForAPKs（JIT-less AOT 转换未接）。" >&2
+  exit 1
+fi
+if ! grep -q 'husk_codesign_chain_from_executable' vendor/husk/bridge/HuskyEngine.m; then
+  echo "致命错误: HuskyEngine.m 未提取 App 证书链，签名 dylib 不会被 iOS 信任。" >&2
+  exit 1
+fi
+if ! grep -q 'prepareAOT(apkPaths:' Sources/Container/HuskyGameView.swift; then
+  echo "致命错误: HuskyGameView 未在 launch 前调用 AOT 转换。" >&2
+  exit 1
+fi
+echo "  Husk 翻译层校验通过（framework + ANGLE + 证书 + 加号入口 + AOT 转换 + APK 文档类型）"
 
 echo "==> [1.9/4] 校验全 App 玻璃与时间戳版本号"
 if ! grep -q 'backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)' Sources/Container/GlassChrome.swift; then

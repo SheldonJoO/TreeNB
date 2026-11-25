@@ -16,6 +16,9 @@
 #include "../src/translation-layer-next/husk-tl-unity-app.h"
 // JIT-less dylib 搜索目录
 #include "../src/translation-layer-next/husk-tl-ld.h"
+// JIT-less AOT 转换（.so → 签名 dylib）+ 从主可执行文件提取证书链
+#include "../src/translation-layer-next/husk-tl-aot.h"
+#include "../src/translation-layer-next/husk-tl-codesign.h"
 
 @implementation HuskyEngine
 
@@ -50,6 +53,49 @@
     setenv("TL_NO_XMEM", "1", 1);
     NSString *joined = [dirs componentsJoinedByString:@":"];
     tl_ld_set_aot_dir(joined.UTF8String ?: "");
+}
+
+- (int)prepareAOTForAPKs:(NSArray<NSString *> *)apkPaths
+                cacheDir:(NSString *)cacheDir
+                     p12:(NSData *)p12Data
+                password:(NSString *)password
+                 certTag:(NSString *)certTag
+               signIdent:(NSString *)signIdent
+                   error:(NSString **)error {
+    if (error) *error = @"";
+    if (apkPaths.count == 0) { if (error) *error = @"没有 APK"; return -1; }
+
+    // iOS 上 dylib 用 p12 里开发者证书签名后，还需要把 App 自身签名里的
+    // 证书链（Apple 根 / WWDR / 中间证书）带进 dylib，否则 iOS 不信任。
+    // 这一步必须在 husk_aot_prepare 之前做一次；主可执行文件即当前 App。
+    NSString *exe = NSBundle.mainBundle.executablePath;
+    int chain = husk_codesign_chain_from_executable(exe.fileSystemRepresentation);
+    if (chain <= 0) {
+        // 无签名包（未侧载）时取不到链，转换仍可继续，但真机上会加载失败。
+        // 把情况写进 error 让 UI 提示用户先侧载并重置证书。
+        if (error) *error = @"无法从 App 自身签名提取证书链，请先侧载并重置证书";
+    }
+
+    const char **cPaths = (const char **)calloc(apkPaths.count, sizeof(char *));
+    if (!cPaths) { if (error) *error = @"内存不足"; return -1; }
+    for (NSUInteger i = 0; i < apkPaths.count; i++) {
+        cPaths[i] = [apkPaths[i] fileSystemRepresentation];
+    }
+    char err[512] = "";
+    int ready = husk_aot_prepare(cPaths, (int)apkPaths.count,
+                                 cacheDir.fileSystemRepresentation,
+                                 (const uint8_t *)p12Data.bytes, (size_t)p12Data.length,
+                                 password.UTF8String ?: "",
+                                 certTag.UTF8String ?: "",
+                                 signIdent.UTF8String ?: "",
+                                 NULL, NULL, err, sizeof(err));
+    free(cPaths);
+    // ready < 0 是整体失败，用 AOT 的错误覆盖；否则保留上面的证书链警告。
+    if (ready < 0 && error) {
+        *error = (err[0] != '\0') ? ([NSString stringWithUTF8String:err] ?: @"AOT 转换失败")
+                                  : @"AOT 转换失败";
+    }
+    return ready;
 }
 
 - (void)setSharedStorageDirectory:(NSString *)dir {
@@ -149,6 +195,11 @@
     if ([engine isEqualToString:@"Unreal Engine"]) return YES;
     if ([engine isEqualToString:@"Rockstar"]) return YES;
     if ([engine isEqualToString:@"GameMaker"]) return YES;
+    // launchAPK 有 husk_flutter_launch 分支，translation-layer-next 的
+    // launch_thread 也实现了 ENGINE_FLUTTER（经 ANGLE 走 Impeller）。
+    if ([engine isEqualToString:@"Flutter"]) return YES;
+    // NativeActivity 走 UE4 启动函数（其内部 tl_na_start/tl_na_run 就是
+    // NativeActivity 驱动），不是 bug。
     if ([engine isEqualToString:@"NativeActivity"]) return YES;
     if ([engine isEqualToString:@"Cocos"]) {
         for (NSString *lib in libraries) {
