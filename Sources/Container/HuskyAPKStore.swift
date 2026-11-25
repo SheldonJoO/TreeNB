@@ -170,14 +170,17 @@ final class HuskyAPKStore: ObservableObject {
         }
         let bundleID = Bundle.main.bundleIdentifier ?? "com.openssai.app"
         var err: NSString? = nil
-        let ready = HuskyEngine.shared.prepareAOTForAPKs(
-            apkPaths,
+        // ObjC 的 prepareAOTForAPKs: 被 Swift 3 导入为 prepareAOT(forAPKs:)
+        // （For 当作介词拆分），返回 int 导入为 Int32，需显式转 Int。
+        let ready32 = HuskyEngine.shared.prepareAOT(
+            forAPKs: apkPaths,
             cacheDir: aotCacheDir(),
             p12: active.p12Data,
             password: active.password ?? "",
             certTag: active.serialNumber,
             signIdent: bundleID,
             error: &err)
+        let ready = Int(ready32)
         if ready < 0 {
             return (0, err as String? ?? "AOT 转换失败")
         }
