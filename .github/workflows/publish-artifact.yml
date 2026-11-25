@@ -1,0 +1,46 @@
+name: Publish IPA Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Source Actions run id containing TreeNB-unsigned artifact
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TreeNB-unsigned
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: /tmp/tnb-artifact
+
+      - name: Push IPA to ipa-store branch
+        run: |
+          set -euo pipefail
+          IPA=$(find /tmp/tnb-artifact -type f -name '*.ipa' | head -1)
+          test -n "$IPA"
+          STAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
+          NAME="TreeNB-Husk玻璃Logo时间戳-${STAMP}-unsigned.ipa"
+          cp "$IPA" "/tmp/${NAME}"
+          git checkout --orphan ipa-store
+          git rm -rf --ignore-unmatch . >/dev/null 2>&1 || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "/tmp/${NAME}" "${NAME}"
+          git add -A
+          git -c user.name='TreeNB CI' -c user.email='ci@treenb.local' commit -m "publish ${NAME}"
+          git push --force origin ipa-store
+          echo "PUBLISHED=${NAME}"
