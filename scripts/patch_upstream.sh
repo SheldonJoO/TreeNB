@@ -58,9 +58,9 @@ fi
 log "A0.2 写入时间戳版本号"
 TNB_STAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
 TNB_SHORT="1.0.${TNB_STAMP:2:6}"
-python3 - "$ROOT/config/TreeNB-Info.plist" "$ROOT/config/AltWidget-Info.plist" "$ROOT/config/TreeNB.xcconfig" "$TNB_SHORT" "$TNB_STAMP" <<'PY'
+python3 - "$ROOT/config/TreeNB-Info.plist" "$ROOT/config/AltWidget-Info.plist" "$ROOT/config/TreeNB.xcconfig" "$ROOT/project.yml" "$TNB_SHORT" "$TNB_STAMP" <<'PY'
 import re, sys
-short, build = sys.argv[4], sys.argv[5]
+short, build = sys.argv[5], sys.argv[6]
 for path in sys.argv[1:3]:
     s = open(path, encoding='utf-8').read()
     s = re.sub(r'(<key>CFBundleShortVersionString</key>\s*<string>).*?(</string>)',
@@ -77,6 +77,31 @@ s = re.sub(r'(?m)^MARKETING_VERSION\s*=.*$', '', s)
 s = re.sub(r'(?m)^CURRENT_PROJECT_VERSION\s*=.*$', '', s)
 s = s.rstrip() + f"\n\n// TreeNB 时间戳版本号（patch_upstream.sh A0.2 每次构建写入）\nMARKETING_VERSION = {short}\nCURRENT_PROJECT_VERSION = {build}\n"
 open(xcconfig, 'w', encoding='utf-8').write(s)
+
+# 决定性方案：xcodegen 生成的 pbxproj 里有 target 级 MARKETING_VERSION=1.0，
+# 优先级高于 xcconfig，导致 archive 仍写 1.0。直接把字面量写进
+# project.yml 的 TreeNB target info.properties，xcodegen 会原样写进生成 plist。
+project = sys.argv[4]
+s = open(project, encoding='utf-8').read()
+# 幂等：先移除上一次注入的行
+s = re.sub(r'(?m)^.*TNB_VERSION_STAMP.*\n', '', s)
+marker = "  TreeNB:\n"
+pos = s.find(marker)
+if pos < 0:
+    raise SystemExit('FATAL[A0.2]: project.yml 缺少 TreeNB target')
+ipos = s.find("    info:\n", pos)
+if ipos < 0:
+    raise SystemExit('FATAL[A0.2]: TreeNB target 缺少 info 段')
+ppos = s.find("      properties:\n", ipos)
+if ppos < 0:
+    raise SystemExit('FATAL[A0.2]: TreeNB target 缺少 info.properties')
+ins = ppos + len("      properties:\n")
+injected = (
+    f"        CFBundleShortVersionString: {short} # TNB_VERSION_STAMP\n"
+    f"        CFBundleVersion: {build} # TNB_VERSION_STAMP\n"
+)
+s = s[:ins] + injected + s[ins:]
+open(project, 'w', encoding='utf-8').write(s)
 PY
 ok "版本号已写：$TNB_SHORT ($TNB_STAMP)"
 
