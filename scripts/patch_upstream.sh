@@ -58,9 +58,9 @@ fi
 log "A0.2 写入时间戳版本号"
 TNB_STAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
 TNB_SHORT="1.0.${TNB_STAMP:2:6}"
-python3 - "$ROOT/config/TreeNB-Info.plist" "$ROOT/config/AltWidget-Info.plist" "$TNB_SHORT" "$TNB_STAMP" <<'PY'
+python3 - "$ROOT/config/TreeNB-Info.plist" "$ROOT/config/AltWidget-Info.plist" "$ROOT/config/TreeNB.xcconfig" "$TNB_SHORT" "$TNB_STAMP" <<'PY'
 import re, sys
-short, build = sys.argv[3], sys.argv[4]
+short, build = sys.argv[4], sys.argv[5]
 for path in sys.argv[1:3]:
     s = open(path, encoding='utf-8').read()
     s = re.sub(r'(<key>CFBundleShortVersionString</key>\s*<string>).*?(</string>)',
@@ -68,6 +68,15 @@ for path in sys.argv[1:3]:
     s = re.sub(r'(<key>CFBundleVersion</key>\s*<string>).*?(</string>)',
                lambda m: m.group(1) + build + m.group(2), s, count=1)
     open(path, 'w', encoding='utf-8').write(s)
+
+# xcodegen 会把 Info.plist 重新写成 $(MARKETING_VERSION) 占位符，
+# 所以必须在 xcconfig 里也写死构建设置，archive 时才会真正替换。
+xcconfig = sys.argv[3]
+s = open(xcconfig, encoding='utf-8').read()
+s = re.sub(r'(?m)^MARKETING_VERSION\s*=.*$', '', s)
+s = re.sub(r'(?m)^CURRENT_PROJECT_VERSION\s*=.*$', '', s)
+s = s.rstrip() + f"\n\n// TreeNB 时间戳版本号（patch_upstream.sh A0.2 每次构建写入）\nMARKETING_VERSION = {short}\nCURRENT_PROJECT_VERSION = {build}\n"
+open(xcconfig, 'w', encoding='utf-8').write(s)
 PY
 ok "版本号已写：$TNB_SHORT ($TNB_STAMP)"
 
