@@ -553,7 +553,7 @@ if ! echo "$BUILD_VER" | grep -Eq '^[0-9]{12}$'; then
   echo "致命错误: CFBundleVersion=[$BUILD_VER] 不是 YYYYMMDDHHMM 时间戳格式。" >&2
   exit 1
 fi
-echo "  全 App 玻璃 + 时间戳版本号校验通过（$SHORT_VER / $BUILD_VER）"
+echo "  全 App 玻璃 + 时间戳版本号校验通过（${SHORT_VER} / ${BUILD_VER}）"
 
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
