@@ -36,7 +36,7 @@ jobs:
           STAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
           NAME="TreeNB-Husk玻璃Logo时间戳-${STAMP}-unsigned.ipa"
           mkdir -p /tmp/tnb-chunks
-          split -b 1048576 "$IPA" /tmp/tnb-chunks/part-
+          split -b 262144 "$IPA" /tmp/tnb-chunks/part-
           git checkout --orphan ipa-store
           git rm -rf --ignore-unmatch . >/dev/null 2>&1 || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
