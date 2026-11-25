@@ -32,7 +32,7 @@ echo "  UIBackgroundModes 含 location，校验通过"
 # 且不得编入旧的 C 假桩（否则 duplicate symbol 或定位仍是假的）。
 IDEF_LIB="upstream/openSSS/local/idevice/swift/IDevice.xcframework/ios-arm64/libidevice_ffi.a"
 if [ ! -f "$IDEF_LIB" ]; then
-  echo "致命错误: 缺少自编译 IDevice 产物 $IDEF_LIB，虚拟定位会失效。" >&2
+  echo "致命错误: 缺少自编译 IDevice 产物 ${IDEF_LIB}，虚拟定位会失效。" >&2
   echo "请确认 CI/本地已跑 scripts/build_idevice.sh。" >&2
   exit 1
 fi
@@ -514,7 +514,7 @@ fi
 CONTAINER_SRC="Sources/Container/ContainerRootView.swift"
 for needle in 'showAPK' '安装安卓 APK' 'HuskyAPKView()' 'confirmationDialog'; do
   if ! grep -q "$needle" "$CONTAINER_SRC"; then
-    echo "致命错误: 树🌲应用 加号缺少 APK 入口（$needle）。检查 ContainerRootView.swift。" >&2
+    echo "致命错误: 树🌲应用 加号缺少 APK 入口（${needle}）。检查 ContainerRootView.swift。" >&2
     exit 1
   fi
 done
