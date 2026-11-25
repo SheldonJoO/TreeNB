@@ -253,6 +253,40 @@ else:
 PY
 fi
 
+# A4f. 上游 LCBootstrap.m 在 iOS 26+ 硬性禁止纯 JIT 模式（两处 @available(iOS 26.0,*)
+# 直接 return "JITLess mode is required"）。但 dyld_bypass_validation.m 的
+# init_bypassDyldLibValidation() 在 iOS 27 代码里仍在调用，说明 JIT 绕过机制仍在。
+# TreeNB 目标设备 iOS 27 + StikDebug 可开 JIT，故放开这两处限制，让有 JIT 时
+# 走经典 JIT 路径（checkJITEnabled → init_bypassDyldLibValidation → dlopen guest）。
+# 无 JIT 时下面原本的 checkJITEnabled 循环仍会兜底报错，不会静默失败。
+if [ -f "$LC/LiveContainer/LCBootstrap.m" ]; then
+  python3 - "$LC/LiveContainer/LCBootstrap.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+marker = 'TREENB_ALLOW_JIT_IOS26'
+if marker in s:
+    print('  LCBootstrap.m: iOS26+ JIT 解禁已注入（幂等）')
+else:
+    block = '''        if(@available(iOS 26.0 ,*))  {
+            return @"JITLess mode is required since iOS 26. Please set it up in settings. \\nPlease go to TreeNewBee settings -> tap \\"Import Certificate from openSSS\\" / \\"Import Certificate\\"";
+        }
+'''
+    if block not in s:
+        print('  LCBootstrap.m: 未找到 iOS26 限制块（可能上游已改），跳过')
+    else:
+        repl = '''        // TREENB_ALLOW_JIT_IOS26: 放开上游 iOS26+ 强制 JITLess 限制。
+        // 有 JIT（StikDebug）时走经典 JIT 路径；无 JIT 时下方循环仍会兜底报错。
+#if 0
+''' + block + '''#endif
+'''
+        n = s.count(block)
+        s = s.replace(block, repl)
+        open(p, 'w', encoding='utf-8').write(s)
+        print('  LCBootstrap.m: 已注释 %d 处 iOS26+ JIT 限制' % n)
+PY
+fi
+
 # A4d. LCSharedUtils launchToGuestAppWithClassicMode 重启本 App 时用
 # NSUserDefaults.lcMainBundle.bundleIdentifier。但 lcMainBundle 是 C 全局，
 # 只在 LiveContainerMain / LCRunGuestExtension 里赋值；宿主冷启动调用本方法时
