@@ -5,6 +5,10 @@
 //  复用树 App 现有风格（系统列表 / 系统色），不引入自定义主题依赖。
 //  点击游戏 → 全屏呈现 HuskyGameView（UIKit 包装），三指点击返回。
 //
+//  iOS 27 玻璃拟态：CI 锁 Xcode 16.4（无 iOS 26 SDK），无法用原生
+//  .glassEffect()；用 iOS 15+ 的 ultraThinMaterial + 高光描边 + 柔和
+//  阴影模拟 Liquid Glass。材质只作用于卡片/控件层，符合 HIG（不进内容层）。
+//
 
 import SwiftUI
 import UIKit
@@ -20,17 +24,34 @@ struct HuskyAPKView: View {
         List {
             if store.apps.isEmpty {
                 EmptyAppsSection()
+                    .glassCard()
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             } else {
                 appsSection
             }
             infoSection
         }
+        .listStyle(.plain)
+        .scrollContentBackgroundCompat()
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(uiColor: .systemGroupedBackground),
+                    Color(uiColor: .secondarySystemGroupedBackground)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
         .navigationTitle("安卓应用")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 SwiftUI.Button { showPicker = true } label: {
                     Image(systemName: "plus")
+                        .glassToolbarIcon()
                 }
             }
         }
@@ -49,28 +70,38 @@ struct HuskyAPKView: View {
     // MARK: - 拆分子表达式（避免 body 类型检查超时）
 
     private var appsSection: some View {
-        Section {
-            ForEach(store.apps) { app in
-                AppRow(app: app) {
-                    if app.supported {
-                        running = app
-                    } else {
-                        message = "这个 APK 当前无法运行：\(app.detail)"
-                    }
+        ForEach(store.apps) { app in
+            AppRow(app: app) {
+                if app.supported {
+                    running = app
+                } else {
+                    message = "这个 APK 当前无法运行：\(app.detail)"
                 }
             }
-            .onDelete { indexSet in
-                for i in indexSet { store.remove(store.apps[i]) }
+            .glassCard()
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                SwiftUI.Button(role: .destructive) {
+                    store.remove(app)
+                } label: {
+                    Label("删除", systemImage: "trash")
+                }
             }
         }
     }
 
     private var infoSection: some View {
-        Section {
-            Text("翻译层在设备本地运行 APK，不需要安卓系统镜像。游戏画面由 ANGLE 渲染；三指点击返回列表。")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
+        Text("翻译层在设备本地运行 APK，不需要安卓系统镜像。游戏画面由 ANGLE 渲染；三指点击返回列表。")
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassCard(radius: 14)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }
 
     private var alertBinding: Binding<MessageWrapper?> {
@@ -101,21 +132,20 @@ struct HuskyAPKView: View {
 
     private struct EmptyAppsSection: View {
         var body: some View {
-            Section {
-                VStack(spacing: 10) {
-                    Image(systemName: "hammer.fill")
-                        .font(.system(size: 36))
-                        .foregroundColor(.secondary)
-                    Text("还没有安卓应用")
-                        .font(.headline)
-                    Text("点右上角 + 导入 APK。支持 Unity / Godot / cocos 等引擎游戏。")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 30)
+            VStack(spacing: 10) {
+                Image(systemName: "hammer.fill")
+                    .font(.system(size: 36))
+                    .foregroundColor(.secondary)
+                Text("还没有安卓应用")
+                    .font(.headline)
+                Text("点右上角 + 导入 APK。支持 Unity / Godot / cocos 等引擎游戏。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 30)
+            .padding(.horizontal, 12)
         }
     }
 
@@ -143,8 +173,63 @@ struct HuskyAPKView: View {
                         .foregroundColor(.secondary)
                 }
             }
+            .padding(12)
             .contentShape(Rectangle())
             .onTapGesture(perform: tap)
+        }
+    }
+}
+
+// MARK: - iOS 27 玻璃拟态（材质模拟）
+
+/// 用 iOS 15+ 材质模拟 Liquid Glass：超薄材质填充 + 对角高光描边 + 柔和阴影。
+/// CI 无 iOS 26 SDK，故不直接用 .glassEffect()；iOS 27 上系统仍会给
+/// 导航栏/alert 等原生控件套上真正的 Liquid Glass，这里补自定义卡片层。
+private struct GlassCard: ViewModifier {
+    var radius: CGFloat = 16
+    func body(content: Content) -> some View {
+        content
+            .background(
+                ZStack {
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.5), Color.white.opacity(0.06)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 0.8
+                        )
+                }
+                .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 4)
+            )
+    }
+}
+
+private extension View {
+    func glassCard(radius: CGFloat = 16) -> some View {
+        modifier(GlassCard(radius: radius))
+    }
+
+    /// 工具栏加号图标的玻璃底：圆形超薄材质 + 高光边。
+    func glassToolbarIcon() -> some View {
+        self
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundColor(.accentColor)
+            .frame(width: 32, height: 32)
+            .background(Circle().fill(.ultraThinMaterial))
+            .overlay(Circle().stroke(Color.white.opacity(0.4), lineWidth: 0.6))
+    }
+
+    /// .scrollContentBackground(.hidden) 是 iOS 16+，按系统版本安全应用。
+    @ViewBuilder
+    func scrollContentBackgroundCompat() -> some View {
+        if #available(iOS 16.0, *) {
+            self.scrollContentBackground(.hidden)
+        } else {
+            self
         }
     }
 }
