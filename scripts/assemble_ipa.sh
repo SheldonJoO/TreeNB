@@ -510,11 +510,14 @@ if ! find "$APP" -name 'cacert.pem' | grep -q .; then
   echo "警告: 包内缺少 cacert.pem，游戏的 HTTPS 证书校验可能失败。"
 fi
 # 加号菜单 APK 入口（源码级校验，Swift 字符串编译后会被拆分，字节流搜不到）
-SHELL_SRC="upstream/openSSS/AltStore/Shell/AppsViewController.swift"
-if [ -f "$SHELL_SRC" ] && ! grep -q 'onInstallAPK' "$SHELL_SRC"; then
-  echo "致命错误: 加号菜单未注入 APK 入口（onInstallAPK）。检查 patch_upstream.sh 的 C2 段。" >&2
-  exit 1
-fi
+# 入口在「树🌲应用」Tab 的 ContainerRootView 加号里（不在侧载页 AppsViewController）。
+CONTAINER_SRC="Sources/Container/ContainerRootView.swift"
+for needle in 'showAPK' '安装安卓 APK' 'HuskyAPKView()' 'confirmationDialog'; do
+  if ! grep -q "$needle" "$CONTAINER_SRC"; then
+    echo "致命错误: 树🌲应用 加号缺少 APK 入口（$needle）。检查 ContainerRootView.swift。" >&2
+    exit 1
+  fi
+done
 if ! grep -q 'org.android.package-archive' project.yml; then
   echo "致命错误: project.yml 未声明 .apk 文档类型，文件选择器选不了 APK。" >&2
   exit 1

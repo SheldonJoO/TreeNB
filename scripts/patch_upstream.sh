@@ -1116,103 +1116,20 @@ cp "$ROOT/Sources/Spike/"*.swift "$SSS/AltStore/TreeNB/" 2>/dev/null || true
 ok "适配源码已挂载（Container/Routing/Widget/Bridge/Spike/HuskyUI）"
 
 # ---------------------------------------------------------------------------
-# C2. Husk 翻译层：加号菜单加"安装安卓 APK"入口
-# 在 InstallAppDialog.presentSourceSelection 加可选 onInstallAPK 回调（默认 nil，
-# 不影响 MyAppsViewController 的调用点），actionSheet 里出现菜单项；
-# AppsViewController.addButtonTapped 传入回调，用 UIHostingController 弹出 HuskyAPKView。
-log "注入安卓 APK 入口到加号菜单"
-HUSKY_SSS="$SSS" python3 - <<'PY'
-import sys, os
-
-# --- 1) InstallAppDialog.swift：加可选回调参数 + actionSheet 菜单项 ---
-SSS = os.environ['HUSKY_SSS']
-p = SSS + '/SideStore/DeepLinks/InstallAppDialog.swift'
-try:
-    s = open(p, encoding='utf-8').read()
-except FileNotFoundError:
-    sys.stderr.write('FATAL[Husky]: InstallAppDialog.swift 未找到\n')
-    sys.exit(3)
-
-if 'onInstallAPK' not in s:
-    a_sig = '''        onChooseFiles: @escaping () -> Void,
-        onConfirm: @escaping (URL) -> Void
-    ) {'''
-    a_sig_new = '''        onChooseFiles: @escaping () -> Void,
-        onConfirm: @escaping (URL) -> Void,
-        onInstallAPK: (() -> Void)? = nil
-    ) {'''
-    if a_sig not in s:
-        sys.stderr.write('FATAL[Husky]: InstallAppDialog 签名锚点未找到\n')
-        sys.exit(3)
-    s = s.replace(a_sig, a_sig_new, 1)
-
-    # 在 Cancel action 前插入 APK action（仅 .prompt 分支的 actionSheet）。
-    a_cancel = '''            alertController.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: ""), style: .cancel))'''
-    a_apk = '''            if let onInstallAPK {
-                alertController.addAction(UIAlertAction(title: "安装安卓 APK", style: .default) { _ in
-                    onInstallAPK()
-                })
-            }
-            alertController.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: ""), style: .cancel))'''
-    if a_cancel not in s:
-        sys.stderr.write('FATAL[Husky]: InstallAppDialog Cancel 锚点未找到\n')
-        sys.exit(3)
-    s = s.replace(a_cancel, a_apk, 1)
-
-    open(p, 'w', encoding='utf-8').write(s)
-    print('  InstallAppDialog.swift: 已加 onInstallAPK 回调 + 菜单项')
-else:
-    print('  InstallAppDialog.swift: 已含 APK 入口，跳过')
-
-# --- 2) AppsViewController.swift：addButtonTapped 传回调并 present HuskyAPKView ---
-p2 = SSS + '/AltStore/Shell/AppsViewController.swift'
-s2 = open(p2, encoding='utf-8').read()
-if 'HuskyAPKView' not in s2:
-    a_call = '''        InstallAppDialog.presentSourceSelection(
-            from: self,
-            barButtonItem: navigationItem.rightBarButtonItem,
-            onChooseFiles: { [weak self] in
-                self?.presentDocumentPicker()
-            },
-            onConfirm: { [weak self] url in
-                // Remote URL: download into the pending queue.
-                self?.importIPA(at: url)
-            }
-        )
-    }'''
-    a_call_new = '''        InstallAppDialog.presentSourceSelection(
-            from: self,
-            barButtonItem: navigationItem.rightBarButtonItem,
-            onChooseFiles: { [weak self] in
-                self?.presentDocumentPicker()
-            },
-            onConfirm: { [weak self] url in
-                // Remote URL: download into the pending queue.
-                self?.importIPA(at: url)
-            },
-            onInstallAPK: { [weak self] in
-                guard let self else { return }
-                let host = UIHostingController(rootView: HuskyAPKView())
-                host.title = "安卓应用"
-                let nav = UINavigationController(rootViewController: host)
-                nav.modalPresentationStyle = .fullScreen
-                self.present(nav, animated: true)
-            }
-        )
-    }'''
-    if a_call not in s2:
-        sys.stderr.write('FATAL[Husky]: AppsViewController addButtonTapped 锚点未找到\n')
-        sys.exit(3)
-    s2 = s2.replace(a_call, a_call_new, 1)
-    # UIHostingController 来自 SwiftUI，补 import（原文件只有 UIKit/CoreData/UTI）。
-    if 'import SwiftUI' not in s2:
-        s2 = s2.replace('import UIKit', 'import UIKit\nimport SwiftUI', 1)
-    open(p2, 'w', encoding='utf-8').write(s2)
-    print('  AppsViewController.swift: 已接 APK 入口（present HuskyAPKView）')
-else:
-    print('  AppsViewController.swift: 已接 APK 入口，跳过')
-PY
-ok "安卓 APK 入口已注入加号菜单"
+# C2. 安卓 APK 入口（在「树🌲应用」Tab 的加号里）
+# ---------------------------------------------------------------------------
+# 入口现已直接写在 Sources/Container/ContainerRootView.swift（经 C1 源码挂载进主 target）：
+# 容器页右上角加号 → confirmationDialog「安装 IPA / 安装安卓 APK」→ 弹出 HuskyAPKView。
+# 之前误挂在开放侧载页 AppsViewController（=「树🌲侧载」Tab），已移除——APK 属于容器/应用页，
+# 与用户心智一致。此处不再 patch 上游任何文件，仅做存在性校验。
+log "校验安卓 APK 入口（树🌲应用 Tab 加号）"
+grep -q 'showAPK' "$ROOT/Sources/Container/ContainerRootView.swift" \
+  || { echo "FATAL[Husky]: ContainerRootView 缺少 showAPK 状态，APK 入口丢失" >&2; exit 3; }
+grep -q '安装安卓 APK' "$ROOT/Sources/Container/ContainerRootView.swift" \
+  || { echo "FATAL[Husky]: ContainerRootView 缺少 APK 菜单项" >&2; exit 3; }
+grep -q 'HuskyAPKView()' "$ROOT/Sources/Container/ContainerRootView.swift" \
+  || { echo "FATAL[Husky]: ContainerRootView 未挂载 HuskyAPKView" >&2; exit 3; }
+ok "安卓 APK 入口已在树🌲应用 Tab 加号（已校验）"
 
 # ---------------------------------------------------------------------------
 # D. 身份归一：bundle id / App Group（报告 §3.6）
