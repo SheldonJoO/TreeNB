@@ -525,8 +525,12 @@ fi
 echo "  Husk 翻译层校验通过（framework + ANGLE + 证书 + 加号入口 + APK 文档类型）"
 
 echo "==> [1.9/4] 校验全 App 玻璃与时间戳版本号"
-if ! grep -q 'systemUltraThinMaterial' Sources/Container/GlassChrome.swift; then
-  echo "致命错误: GlassChrome.swift 缺少 systemUltraThinMaterial，真机不会有玻璃效果。" >&2
+if ! grep -q 'backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)' Sources/Container/GlassChrome.swift; then
+  echo "致命错误: GlassChrome.swift 未使用系统 backgroundEffect 毛玻璃（v1 插子视图会穿模）。" >&2
+  exit 1
+fi
+if grep -q 'tnbGlassNavLayout\|insertSubview(blur' Sources/Container/GlassChrome.swift; then
+  echo "致命错误: GlassChrome.swift 仍含 swizzler/insertSubview 穿模实现。" >&2
   exit 1
 fi
 if ! grep -q 'GlassChrome.install()' upstream/openSSS/AltStore/main.swift; then
@@ -537,8 +541,8 @@ fi
 # 收到 SIGPIPE（"failed to flush output"），在 pipefail 下被误判为校验失败。
 TNB_STRINGS=$(mktemp)
 strings "$APP/$MAIN_EXE" > "$TNB_STRINGS" 2>/dev/null || true
-if ! grep -q 'tnbGlassNavLayout' "$TNB_STRINGS"; then
-  echo "致命错误: 主二进制缺少 tnbGlassNavLayout selector，玻璃 swizzler 未编入。" >&2
+if ! grep -q 'TNB_GLASS_APPEARANCE_V2' "$TNB_STRINGS"; then
+  echo "致命错误: 主二进制缺少 TNB_GLASS_APPEARANCE_V2，v2 玻璃实现未编入。" >&2
   rm -f "$TNB_STRINGS"
   exit 1
 fi

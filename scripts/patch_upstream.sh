@@ -1246,10 +1246,10 @@ ok "Widget Keychain service 已归一为 com.openssai.app.treeWidget"
 # E1. 全 App 液态玻璃（导航栏 + Tab 栏）
 # ---------------------------------------------------------------------------
 # 只改控件层，符合 HIG——玻璃不进内容层。
-# 关键：CI 用 Xcode 16.4 / iOS18.5 SDK，iOS26+ 的系统 Liquid Glass 只对
-# iOS26 SDK 构建的 App 自动生效，旧 SDK 上 configureWithDefaultBackground
-# 仍是不透明背景。故改为：appearance 全透明 + GlassChrome 直接挂
-# UIVisualEffectView(.systemUltraThinMaterial)，iOS15~27 表现一致。
+# v1 用 swizzling 往 bar 里插自定义 UIVisualEffectView，真机穿模（blur 盖住
+# 大标题/内容）且 appearance 被清空后没有玻璃。v2 改用系统
+# UIBarAppearance.backgroundEffect = .systemUltraThinMaterial：由 UINavigationBar /
+# UITabBar 自己管理背景 blur，层级正确，iOS13~27 都有真实动态毛玻璃。
 # 用 marker 幂等，锚点精确匹配，找不到直接 FATAL（不静默失败）。
 log "E1. 全 App 玻璃拟态（导航栏 + Tab 栏）"
 SHELL_GLASS="$SSS/AltStore/Shell/ShellTabBarController.swift"
@@ -1261,49 +1261,36 @@ s = open(p, encoding='utf-8').read()
 orig = s
 changes = []
 
-# 1) 导航栏：去掉不透明黑背景，改默认背景（iOS26+ 自动 Liquid Glass）
+# 1) 导航栏：系统 appearance 自带毛玻璃背景，标题/按钮层级不受影响
 a_nav = '''        let appearance = UINavigationBarAppearance()
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = ShellTheme.background
         appearance.shadowColor = .clear
 '''
-b_nav = '''        let appearance = UINavigationBarAppearance()
-        // TREENB_GLASS_THEME: 系统背景清空，由 GlassChrome 挂的
-        // UIVisualEffectView(.systemUltraThinMaterial) 提供全版本一致的玻璃。
-        appearance.configureWithTransparentBackground()
-        appearance.backgroundColor = .clear
-        appearance.backgroundImage = UIImage()
-        appearance.shadowImage = UIImage()
-        appearance.shadowColor = .clear
+b_nav = '''        // TREENB_GLASS_THEME_V2: 用系统 backgroundEffect 生成毛玻璃背景；
+        // 不再手动插 UIVisualEffectView（v1 会穿模盖住大标题与内容）。
+        let appearance = GlassChrome.makeNavigationAppearance()
 '''
-if 'TREENB_GLASS_THEME' not in s:
+if 'TREENB_GLASS_THEME_V2' not in s:
     if a_nav not in s:
         sys.stderr.write('FATAL[Glass]: 导航栏背景锚点未找到，上游结构已变\n')
         sys.exit(2)
     s = s.replace(a_nav, b_nav, 1)
     changes.append('导航栏玻璃')
 
-    # 2) Tab 栏：在 viewDidLoad 的 tabBar.tintColor 后注入玻璃 appearance
+    # 2) Tab 栏：在 viewDidLoad 的 tabBar.tintColor 后注入系统毛玻璃 appearance
     a_tab = '''        tabBar.tintColor = ShellTheme.accentColor
 
         NotificationCenter.default.addObserver(
 '''
     b_tab = '''        tabBar.tintColor = ShellTheme.accentColor
 
-        // TREENB_GLASS_THEME: 清掉系统不透明背景；毛玻璃由 GlassChrome 挂载。
+        // TREENB_GLASS_THEME_V2: 系统 backgroundEffect 毛玻璃，层级正确不穿模。
+        tabBar.standardAppearance = GlassChrome.makeTabBarAppearance()
         if #available(iOS 15.0, *) {
-            let tabAppearance = UITabBarAppearance()
-            tabAppearance.configureWithTransparentBackground()
-            tabAppearance.backgroundColor = .clear
-            tabAppearance.backgroundImage = UIImage()
-            tabAppearance.shadowImage = UIImage()
-            tabAppearance.shadowColor = .clear
-            tabBar.standardAppearance = tabAppearance
-            tabBar.scrollEdgeAppearance = tabAppearance
+            tabBar.scrollEdgeAppearance = tabBar.standardAppearance
         }
         tabBar.isTranslucent = true
-        tabBar.backgroundImage = UIImage()
-        tabBar.shadowImage = UIImage()
 
         NotificationCenter.default.addObserver(
 '''
@@ -1316,11 +1303,13 @@ if 'TREENB_GLASS_THEME' not in s:
     open(p, 'w', encoding='utf-8').write(s)
     print('  ShellTabBarController.swift: ' + '；'.join(changes))
 else:
-    print('  ShellTabBarController.swift: 已含 TREENB_GLASS_THEME，跳过')
+    print('  ShellTabBarController.swift: 已含 TREENB_GLASS_THEME_V2，跳过')
 PY
-  # 硬校验：marker 必须落地，且不透明背景必须已移除（导航栏函数内）
-  grep -q 'TREENB_GLASS_THEME' "$SHELL_GLASS" \
-    || { echo "FATAL[Glass]: 玻璃主题 marker 未注入" >&2; exit 4; }
+  # 硬校验：v2 marker 必须落地，且不透明背景/手动插子视图必须已移除
+  grep -q 'TREENB_GLASS_THEME_V2' "$SHELL_GLASS" \
+    || { echo "FATAL[Glass]: v2 玻璃主题 marker 未注入" >&2; exit 4; }
+  grep -q 'GlassChrome.makeNavigationAppearance()' "$SHELL_GLASS" \
+    || { echo "FATAL[Glass]: 导航栏未使用 GlassChrome v2 appearance" >&2; exit 4; }
   if grep -q 'appearance.configureWithOpaqueBackground()' "$SHELL_GLASS"; then
     echo "FATAL[Glass]: 导航栏仍为不透明背景，玻璃化失败" >&2; exit 5
   fi
