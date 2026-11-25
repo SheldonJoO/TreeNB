@@ -81,13 +81,20 @@ struct HuskyAPKView: View {
     }
 
     private func handlePicked(_ urls: [URL]) {
-        let count = urls.filter { $0.pathExtension.lowercased() == "apk" }.count
-        if count > 0 {
-            store.reload()
-            message = "已导入 \(count) 个 APK"
-        } else {
+        let apks = urls.filter { $0.pathExtension.lowercased() == "apk" }
+        guard !apks.isEmpty else {
             message = "没有选择 APK 文件"
+            return
         }
+        // importAPKs 内部会把文件复制进 App 文档目录并 reload()。
+        guard let id = store.importAPKs(from: urls),
+              let app = store.apps.first(where: { $0.id == id }) else {
+            message = "APK 导入失败，请检查文件是否可读取"
+            return
+        }
+        message = app.supported
+            ? "已导入「\(app.label)」，点击即可运行"
+            : "已导入「\(app.label)」，但当前引擎不支持：\(app.detail)"
     }
 
     private struct MessageWrapper: Identifiable { let text: String; var id: String { text } }
