@@ -97,8 +97,8 @@ if ppos < 0:
     raise SystemExit('FATAL[A0.2]: TreeNB target 缺少 info.properties')
 ins = ppos + len("      properties:\n")
 injected = (
-    f"        CFBundleShortVersionString: {short} # TNB_VERSION_STAMP\n"
-    f"        CFBundleVersion: {build} # TNB_VERSION_STAMP\n"
+    f'        CFBundleShortVersionString: "{short}" # TNB_VERSION_STAMP\n'
+    f'        CFBundleVersion: "{build}" # TNB_VERSION_STAMP\n'
 )
 s = s[:ins] + injected + s[ins:]
 open(project, 'w', encoding='utf-8').write(s)
