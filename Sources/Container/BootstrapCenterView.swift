@@ -318,12 +318,13 @@ private struct SystemIPAImporter: UIViewControllerRepresentable {
             let accessed = url.startAccessingSecurityScopedResource()
             let dest = FileManager.default.temporaryDirectory
                 .appendingPathComponent("tnb-system-install-\(UUID().uuidString).ipa")
-            // FileManager.copyItem 的签名是 (at:to:)，不是 (to:from:)。
-            // 上一版参数写反导致 CI 首次编译时报 "extra argument 'from'" / "missing 'at'"。
-            let copied = try? FileManager.default.copyItem(at: url, to: dest)
+            // FileManager.copyItem(at:to:) 返回 Void（不是 URL），且签名是 (at:to:)。
+            // 上一版既写反了参数、又以为它返回 URL，CI 全量编译两次才暴露。
+            // 正确语义：复制成功后把目标 URL（dest）交给 onPick。
+            let copyOK = (try? FileManager.default.copyItem(at: url, to: dest)) != nil
             if accessed { url.stopAccessingSecurityScopedResource() }
             controller.dismiss(animated: false) { [weak self] in
-                if let copied { self?.onPick(copied) } else { self?.onCancel() }
+                if copyOK { self?.onPick(dest) } else { self?.onCancel() }
             }
         }
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
