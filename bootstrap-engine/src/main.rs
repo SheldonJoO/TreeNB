@@ -39,7 +39,7 @@ fn main() {
             rt.block_on(run_install());
         }
         "version" | _ => {
-            println!("treenb-bootstrap 0.1.0 (aarch64-linux-musl)");
+            println!("treenb-bootstrap 0.1.1 (aarch64-linux-musl)");
             println!("usage: treenb-bootstrap <developer-mode|install>");
         }
     }
