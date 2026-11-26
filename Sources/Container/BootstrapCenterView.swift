@@ -31,6 +31,9 @@ struct BootstrapCenterView: View {
     @State private var showResult = false
     @State private var resultText = ""
     @State private var showPairingImporter = false
+    @State private var showSystemIPAImporter = false
+    // 系统安装引擎进度（区别于 guest 容器安装）
+    @State private var installEvent = "准备安装…"
     @Environment(\.dismiss) private var dismiss
 
     private var readyCount: Int {
@@ -111,6 +114,26 @@ struct BootstrapCenterView: View {
                 Text("「一键配置」会读取你当前 Apple ID 的签名证书（与侧载本 App 用的是同一张），导入后自动重签所有已装应用。全程在本机完成，不需要电脑或 JIT。")
                     .font(.footnote)
             }
+
+            Section {
+                SwiftUI.Button {
+                    showSystemIPAImporter = true
+                } label: {
+                    Label("签名安装 IPA 到系统", systemImage: "app.badge.checkmark")
+                }
+                .disabled(isWorking)
+                if isWorking && installEvent.contains("安装") {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(installEvent).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("设备端签名安装")
+            } footer: {
+                Text("选一个 IPA，用你的 Apple ID 在设备上签名后直接装进系统（不是容器 guest）。需要上面三项环境就绪。签名 + 安装可能需要 1-2 分钟，期间请勿锁屏。")
+                    .font(.footnote)
+            }
         }
         .navigationTitle("一键自举中心")
         .navigationBarTitleDisplayMode(.inline)
@@ -125,6 +148,14 @@ struct BootstrapCenterView: View {
                 importPairing(data)
             } onCancel: {
                 showPairingImporter = false
+            }
+        }
+        .sheet(isPresented: $showSystemIPAImporter) {
+            SystemIPAImporter { url in
+                showSystemIPAImporter = false
+                Task { await installSystemIPA(url) }
+            } onCancel: {
+                showSystemIPAImporter = false
             }
         }
         .alert("配置结果", isPresented: $showResult) {
@@ -185,6 +216,26 @@ struct BootstrapCenterView: View {
         }
     }
 
+    /// 设备端签名安装：把选中的 IPA 交给 TNBInstallEngine，走 openSSS 的
+    /// 签名+上传+安装 pipeline。进度通过 onEvent 回传，全程在主线程更新 UI。
+    private func installSystemIPA(_ url: URL) async {
+        isWorking = true
+        installEvent = "准备安装…"
+        let result = await TNBInstallEngine.shared.install(ipaURL: url) { event in
+            Task { @MainActor in
+                self.installEvent = event.message
+            }
+        }
+        isWorking = false
+        switch result {
+        case .success(let name):
+            resultText = "系统安装成功 ✅\n\(name)\n已装到系统桌面（不是容器 guest）。"
+        case .failure(let err):
+            resultText = err.localizedDescription
+        }
+        showResult = true
+    }
+
     private func importPairing(_ data: Data) {
         guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
             resultText = "配对文件读取失败，请确认选的是 .mobiledevicepairing 文件。"
@@ -222,6 +273,62 @@ private struct StatusRow: View {
             Spacer()
         }
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - 系统安装 IPA 选择器（返回 URL，供引擎读取文件路径）
+private struct SystemIPAImporter: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+    let onCancel: () -> Void
+
+    func makeUIViewController(context: Context) -> IPAHostVC {
+        let vc = IPAHostVC()
+        vc.coordinator = context.coordinator
+        return vc
+    }
+    func updateUIViewController(_ ui: IPAHostVC, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick, onCancel: onCancel) }
+
+    final class IPAHostVC: UIViewController {
+        weak var coordinator: Coordinator?
+        private var presented = false
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            guard !presented, let coordinator else { return }
+            presented = true
+            let picker = UIDocumentPickerViewController(
+                forOpeningContentTypes: [UTType(filenameExtension: "ipa") ?? .data],
+                asCopy: true
+            )
+            picker.delegate = coordinator
+            picker.allowsMultipleSelection = false
+            present(picker, animated: false)
+        }
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        let onCancel: () -> Void
+        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick; self.onCancel = onCancel
+        }
+        func documentPicker(_ controller: UIDocumentPickerViewController,
+                            didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            let accessed = url.startAccessingSecurityScopedResource()
+            let copied = try? FileManager.default.copyItem(
+                to: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("tnb-system-install-\(UUID().uuidString).ipa"),
+                from: url
+            )
+            if accessed { url.stopAccessingSecurityScopedResource() }
+            controller.dismiss(animated: false) { [weak self] in
+                if let copied { self?.onPick(copied) } else { self?.onCancel() }
+            }
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            controller.dismiss(animated: false) { [weak self] in self?.onCancel() }
+        }
     }
 }
 
