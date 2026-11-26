@@ -22,9 +22,16 @@ fn main() {
 
     match mode {
         "developer-mode" => {
-            println!("[treenb] developer-mode helper: not implemented yet");
+            println!("[treenb] 开发者模式助手：接入中。");
+            println!("[treenb] 当前请手动：设置 → 隐私与安全性 → 开发者模式（若未出现，先连 LocalDevVPN）。");
         }
         "install" => {
+            // Accept `--ipa <path>` (ignored for now — the signing stage is not
+            // wired up yet, but keep the CLI contract stable with install.txt).
+            let ipa = args.windows(2).find(|w| w[0] == "--ipa").map(|w| w[1].clone());
+            if let Some(p) = &ipa {
+                println!("[treenb] 待签名 IPA：{}", p);
+            }
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
