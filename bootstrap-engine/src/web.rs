@@ -180,7 +180,7 @@ async fn serve(
                 if !email.is_empty() {
                     if let Ok(mut s) = state.lock() {
                         s.accounts.retain(|a| a != &email);
-                        s.accounts.insert(0, email);
+                        s.accounts.insert(0, email.clone());
                         s.dialog.clear();
                         if let Some(step) = s.steps.iter_mut().find(|x| x.name == "Apple ID") {
                             step.state = "done".into();
