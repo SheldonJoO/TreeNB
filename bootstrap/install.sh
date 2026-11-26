@@ -3,8 +3,8 @@
 #
 # 设计目标：用户只需在 Open Minis 里粘贴一条命令，剩下的全自动。
 # 本脚本负责：
-#   1) 检测环境（iOS 版本、LocalDevVPN 是否连通）
-#   2) 从发布源下载 TreeNB 无签名 IPA
+#   1) 检测环境（iOS 版本、下载工具）
+#   2) 从发布站点下载 TreeNB 无签名 IPA（同站托管，不依赖 GitHub Release）
 #   3) 调用签名安装引擎（siboot 兼容接口）完成配对 + 签名 + 安装
 #
 # ⚠️ 诚实标注（第一版现状）：
@@ -16,8 +16,12 @@
 
 set -eu
 
-TNB_BOOTSTRAP_VERSION="1.0"
-IPA_URL="${TNB_IPA_URL:-https://github.com/SheldonJoO/TreeNB/releases/latest/download/TreeNB-unsigned.ipa}"
+TNB_BOOTSTRAP_VERSION="1.1"
+
+# IPA 地址：优先用第 1 个参数（网页生成的命令会把同站 IPA 绝对地址传进来），
+# 其次用环境变量，最后回退到 GitHub Release 兼容地址。
+SITE_IPA_URL="${1:-${TNB_IPA_URL:-}}"
+IPA_URL="${SITE_IPA_URL:-https://github.com/SheldonJoO/TreeNB/releases/latest/download/TreeNB-unsigned.ipa}"
 WORKDIR="${HOME}/.treenb-bootstrap"
 ENGINE_URL="${TNB_ENGINE_URL:-https://github.com/SheldonJoO/TreeNB/releases/latest/download/tnb-bootstrap-aarch64}"
 
@@ -52,7 +56,7 @@ else
   wget -q --tries=3 "$IPA_URL" -O "$IPA" || fail "IPA 下载失败，请检查网络或发布源。"
 fi
 [ -s "$IPA" ] || fail "下载到的 IPA 是空文件。"
-say "IPA 已下载：$IPA（$(wc -c < "$IPA" | tr -d ' ') 字节）"
+say "IPA 已下载：${IPA}（$(wc -c < "$IPA" | tr -d ' ') 字节）"
 
 # ---- 步骤 3：签名安装引擎 ----
 say "准备签名安装引擎…"
