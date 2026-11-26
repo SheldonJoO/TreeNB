@@ -28,6 +28,11 @@
   .choice{display:block;width:100%;text-align:left;background:#2c2c2e;color:var(--txt);border:0;border-radius:12px;padding:14px 16px;margin-bottom:10px;font-size:15px}
   .reply{width:100%;background:#2c2c2e;color:var(--txt);border:1px solid #48484a;border-radius:12px;padding:14px 16px;margin-bottom:12px;font-size:16px;outline:none}
   .reply:focus{border-color:var(--blue)}
+  .certlist{max-height:45vh;overflow:auto;margin-bottom:14px}
+  .certitem{display:flex;gap:12px;align-items:flex-start;background:#2c2c2e;border-radius:12px;padding:13px 14px;margin-bottom:10px}
+  .certitem input{width:20px;height:20px;flex:none;margin-top:2px;accent-color:#0a84ff}
+  .certitem .cl{font-size:14px;line-height:1.4}
+  .certitem .cs{color:var(--mut);font-size:12px;word-break:break-all}
   .primary{background:var(--blue);color:#fff}
   .foot{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 30px;color:var(--mut);font-size:12px}
   .foot label{display:flex;gap:8px;align-items:center}
@@ -87,6 +92,27 @@ function buildDialog(s, dlg, mask){
     };
     input.onkeydown=function(e){if(e.key==='Enter'){var v=input.value.trim(); if(v)postReply(v)}};
     dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
+  } else if(s.dialog==='cert-picker'){
+    var list='<div class="certlist">';
+    if(!s.certificates.length){
+      list+='<div style="color:var(--mut);font-size:14px;padding:8px 0">没有可吊销的证书</div>';
+    }
+    s.certificates.forEach(function(c,i){
+      list+='<label class="certitem"><input type="checkbox" class="certchk" value="'+esc(c.serial)+'">'+
+            '<span class="cl"><span style="font-weight:600">证书 '+(i+1)+'</span><br>'+
+            '<span class="cs">'+esc(c.label)+'</span></span></label>';
+    });
+    list+='</div>';
+    dlg.innerHTML='<h3>'+esc(s.prompt||'证书已满，请选择要吊销的证书')+'</h3>'+list+
+      '<button class="choice primary" data-action="submit">吊销所选并重试</button>'+
+      '<button class="choice" data-action="back">取消</button>';
+    dlg.querySelector('[data-action="submit"]').onclick=function(){
+      var picked=[];
+      dlg.querySelectorAll('.certchk').forEach(function(c){if(c.checked)picked.push(c.value)});
+      if(!picked.length){alert('请至少勾选一个证书');return}
+      postReply(picked.join(','));
+    };
+    dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
   } else if(s.dialog==='error'){
     dlg.innerHTML='<h3>'+esc(s.prompt||'出了点问题')+'</h3><button class="choice" data-action="back">返回</button>';
     dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
@@ -105,7 +131,8 @@ function render(s){
   }).join('');
 
   var mask=document.getElementById('mask'), dlg=document.getElementById('dlg');
-  var key = s.dialog ? (s.dialog+'|'+(s.prompt||'')+'|'+s.accounts.join(',')) : '';
+  var certKey = (s.certificates||[]).map(function(c){return c.serial}).join(',');
+  var key = s.dialog ? (s.dialog+'|'+(s.prompt||'')+'|'+s.accounts.join(',')+'|'+certKey) : '';
   if(s.dialog && s.dialog!=='none'){
     // 关键：同一个对话框只构建一次，轮询绝不碰 input，用户输入才不会被冲掉
     if(key!==lastDlgKey){ lastDlgKey=key; buildDialog(s,dlg,mask); }
