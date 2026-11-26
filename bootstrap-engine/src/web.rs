@@ -68,7 +68,7 @@ impl Default for Status {
             pairing_pin: String::new(),
             elapsed: 0,
             log: vec![
-                "[TreeNB] 引擎 v0.3.3：静音保活 + 原生 Bonjour 桥接 + 配对码通知，切到设置也不会断。".into(),
+                "[TreeNB] 引擎 v0.3.4：签名前自动把本机注册进 Apple 开发者账号，修复安装报 0xe8008015。".into(),
                 "[TreeNB] 本地网页已启动，等待选择 Apple 账户。".into(),
             ],
         }
