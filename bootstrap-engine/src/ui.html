@@ -69,13 +69,15 @@ function renderPairing(s){
     if(s.pairing_pin){
       pd.innerHTML='<h3>这台 iPhone 的配对码</h3>'+
         '<div class="pin">'+esc(s.pairing_pin)+'</div>'+
-        '<div class="pairstep">在另一个页面：<br>设置 → 隐私与安全性 → 开发者模式 → <b>与主机配对</b> → 选择 <b>TreeNB</b> → 配对</div>'+
-        '<div class="pairstep">先输入 <b>锁屏密码</b>，再输入上面这 <b>6 位配对码</b>。</div>'+
-        '<div class="pairstep" style="color:var(--mut);font-size:13px">配对码告你后会自动安装，不用回到这里点任何按钮。</div>';
+        '<div class="pairstep"><b>这个码由 TreeNB 生成，要你输入到「设置」里</b>——不是让你在这里填，也不是短信验证码。</div>'+
+        '<div class="pairstep">在「设置」页面：选择 <b>Pair with TreeNB</b> → 先输 <b>锁屏密码</b>，再输上面这 <b>6 位码</b>。</div>'+
+        '<div class="pairstep" style="color:var(--mut);font-size:13px">输完不用回到这里，配对成功后会自动签名安装。</div>';
     } else {
       pd.innerHTML='<h3>正在准备设备配对</h3>'+
         '<div class="pairwait"><div class="dot active" style="margin:0 auto 14px;width:30px;height:30px"></div>正在广播可配对服务，等待系统连接…</div>'+
-        '<div class="pairstep">保持 Open Minis 和本页面在前台，配对码生成后会显示在这里。</div>';
+        '<div class="pairstep"><b>现在去：</b>设置 → 隐私与安全性 → 开发者模式 → 找到 <b>Pair with TreeNB</b> 并点它。</div>'+
+        '<div class="pairstep">先输锁屏密码。连上后，<b>6 位配对码会显示在这里这个框里</b>，你再把它填到设置里。</div>'+
+        '<div class="pairstep" style="color:var(--mut);font-size:13px">若设置里那一行是灰的一直转圈：保持 Open Minis 在前台，确认是 1.16+ 版本；展开「显示详情」看广播是否就绪。</div>';
     }
   }
   pm.classList.remove('hide');
