@@ -12,6 +12,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SSS="$ROOT/upstream/openSSS"
 LC="$ROOT/upstream/TreeNewBee"
 
+# 共享路径变量（`set -u` 下必须先定义再用）。历史上散落在各段重复定义，
+# B1g5/B1g7 的闪屏补丁位于 B1c 之前，故统一提到顶部，避免 unbound variable。
+SCENEDELEGATE="$SSS/AltStore/SceneDelegate.swift"
+LAUNCHVC="$SSS/AltStore/LaunchViewController.swift"
+
 log()  { printf '\033[1;34m[patch]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m[ ok ]\033[0m %s\n' "$*"; }
