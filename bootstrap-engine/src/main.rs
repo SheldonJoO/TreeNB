@@ -61,16 +61,14 @@ fn cert_options(certs: &[DevelopmentCertificate]) -> Vec<CertOption> {
 }
 
 /// anisette 服务器候选列表（伪装成 Mac 的机器指纹服务）。
-/// 默认 ani.iloader.app 在国内常被限流，导致 -22406/-20970 误报"密码错误"。
-/// 国内可直连的排在前面；轮换时每个都用全新 storage 子目录以重置 anisette 状态
-/// （否则旧 Trust Key 会报 -45003）。
-/// 这些地址来自 SideStore 官方 anisette-servers 列表。
+/// 真机验证（2026-11-27）：目前只有 ani.jkcoxson.com 能通过握手，放第一位优先用。
+/// 轮换时每个都用全新 storage 子目录以重置 anisette 状态（否则旧 Trust Key 会报 -45003）。
 const ANISETTE_SERVERS: &[&str] = &[
+    "https://ani.jkcoxson.com",      // idevice 作者自持：真机验证唯一能过的，优先
     "https://ani.xu30.top",          // SteX，国内可直连（社区验证）
     "https://ani.sidestore.io",      // SideStore 官方主服务器
     "https://ani.idevicehacked.com",
-    "https://ani.jkcoxson.com",      // idevice 作者自持
-    "https://ani.iloader.app",       // isideload 默认（放最后兜底）
+    "https://ani.iloader.app",       // isideload 默认（兜底）
 ];
 
 fn server_short(url: &str) -> String {
