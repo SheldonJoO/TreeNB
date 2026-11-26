@@ -1,0 +1,119 @@
+# TreeNB —— Xcode 27 / iOS 27 SDK 裸编译验证（隔离，不影响稳定链路）
+#
+# 目的：验证 openSSS + LiveContainer + guest 注入体系能否在 Xcode 27 编译通过。
+# 这是"下一版进 27 / 原生 Liquid Glass"的前置门槛——编不过就不改稳定代码。
+# 差异点（相对 build.yml）：
+#   - runs-on: xcode-27（arm64 / M1 / macOS 27，自带 Xcode 27，无需 setup-xcode）
+#   - 只做无签名 Archive，不签名、不发布、不覆盖现有 artifact
+#   - Rust 段无需改：build_idevice.sh 用 xcrun --sdk iphoneos 自动指向 iOS 27 SDK，
+#     且编的是 aarch64-apple-ios target，在 arm64 host 上是原生路径
+# 触发：仅 workflow_dispatch（手动），避免 push 触发浪费资源。
+
+name: TreeNB Build (Xcode 27)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: treenb-xcode27
+  cancel-in-progress: true
+
+env:
+  SCHEME: TreeNB-App
+  ARCHIVE_PATH: build/TreeNB.xcarchive
+  DERIVED_DATA: build/DerivedData
+
+jobs:
+  build:
+    name: Archive (Xcode 27 / iOS 27 SDK, unsigned)
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Record toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcode-select -p
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Cache SPM packages
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: spm-xcode27-${{ runner.os }}-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: spm-xcode27-${{ runner.os }}-
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Install Rust toolchain (for IDevice location_simulation build)
+        run: |
+          export RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup"
+          export RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
+          sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" target add aarch64-apple-ios
+          "$HOME/.cargo/bin/rustc" --version
+
+      - name: Prepare dependencies & generate project
+        run: ./scripts/prepare_dependencies.sh
+
+      - name: Archive (no signing)
+        id: archive
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild archive \
+            -project TreeNB.xcodeproj \
+            -scheme "$SCHEME" \
+            -archivePath "$ARCHIVE_PATH" \
+            -sdk iphoneos -arch arm64 \
+            -configuration Release \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build/xcodebuild-archive.log
+
+      - name: Report archive errors
+        if: failure() && steps.archive.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import re, os
+          p = 'build/xcodebuild-archive.log'
+          if not os.path.exists(p):
+            print('no archive log')
+            raise SystemExit(0)
+          errs = []
+          for line in open(p, errors='replace'):
+            if re.search(r'error:|fatal error:|: error:', line):
+              errs.append(line.rstrip())
+          print('=== compile errors (%d) ===' % len(errs))
+          for e in errs[:60]:
+            print(e)
+          PY
+
+      - name: Upload archive log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TreeNB-xcode27-log
+          path: build/xcodebuild-archive.log
+          if-no-files-found: ignore
+
+      - name: Assemble unsigned IPA
+        if: success()
+        run: ./scripts/assemble_ipa.sh
+
+      - name: Upload unsigned artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TreeNB-xcode27-unsigned
+          path: build/*.ipa
+          if-no-files-found: ignore
