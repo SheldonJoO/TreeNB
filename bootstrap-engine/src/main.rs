@@ -7,11 +7,13 @@
 //! Ground-up implementation using independent OSS libraries
 //! (isideload MIT, idevice MIT). No siboot / SideInstaller code is used.
 
+mod pairing;
 mod web;
 
 use std::env;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use isideload::auth::apple_account::{TwoFactorCallbackParams, TwoFactorCallbackResponse};
 use isideload::auth::builder::AppleAccountBuilder;
@@ -24,9 +26,9 @@ use isideload::sideload::SideloaderBuilder;
 use isideload::util::callbacks::{ExtensionsBehaviorCallbackBox, MaxCertsCallbackBox};
 use isideload::util::fs_storage::FsStorage;
 
-use idevice::pairing_file::PairingFile;
-use idevice::provider::TcpProvider;
+use idevice::remote_pairing::RpPairingFile;
 
+use pairing::{install_with_pairing, save_pairing_file};
 use web::{CertOption, WebUI};
 
 /// 把 isideload 的证书对象转成网页展示项。serial 为空的证书不能用于吊销，跳过。
@@ -85,7 +87,7 @@ fn main() {
             rt.block_on(run_install(PathBuf::from(ipa)));
         }
         "version" | _ => {
-            println!("treenb-bootstrap 0.2.0 (aarch64-linux-musl)");
+            println!("treenb-bootstrap 0.3.0 (aarch64-linux-musl)");
             println!("usage: treenb-bootstrap <developer-mode|install>");
         }
     }
@@ -253,94 +255,101 @@ async fn run_install(ipa: PathBuf) {
     ui.set_step("签名", "done", "签名完成，等待安装到设备");
     ui.log(format!("[签名] 完成：{}", signed.display()));
 
-    // --- Installation: needs a device pairing file + tunnel address ---
-    let pairing_candidates = [
-        workdir.join("pairing.plist"),
-        workdir.join("pairing_file.plist"),
-    ];
-    let mut pairing = None;
-    for p in &pairing_candidates {
-        if p.exists() {
-            match PairingFile::read_from_file(p) {
-                Ok(pf) => {
-                    ui.log(format!("[设备] 已加载配对文件：{}", p.display()));
-                    pairing = Some(pf);
-                    break;
+    // --- Pairing: iOS 27 设备端自配对，产出 RpPairingFile ---
+    let rp_path = workdir.join("rp_pairing_file.plist");
+    let pf: RpPairingFile = if rp_path.exists() {
+        match RpPairingFile::read_from_file(&rp_path).await {
+            Ok(pf) => {
+                ui.log(format!("[设备] 已加载本机配对文件：{}", rp_path.display()));
+                pf
+            }
+            Err(e) => {
+                ui.log(format!("[设备] 配对文件解析失败，将重新配对：{e:?}"));
+                match do_self_pair(ui.clone(), &rp_path).await {
+                    Ok(pf) => pf,
+                    Err(_) => return keep_alive().await,
                 }
-                Err(e) => ui.log(format!("[设备] 配对文件解析失败 {}: {e:?}", p.display())),
             }
         }
-    }
+    } else {
+        match do_self_pair(ui.clone(), &rp_path).await {
+            Ok(pf) => pf,
+            Err(_) => return keep_alive().await,
+        }
+    };
+    let mut pf = pf;
 
-    let pf = match pairing {
-        Some(pf) => pf,
-        None => {
-            ui.set_step(
-                "安装",
-                "error",
-                "缺少配对文件：请先在设置里完成本机配对，或导入已有配对文件。",
-            );
-            ui.log("[安装] 未找到 pairing.plist，签名已完成但尚未安装。");
-            return keep_alive().await;
-        }
-    };
-
-    let devices = match idevice::tunneld::get_tunneld_devices(SocketAddr::from(([127, 0, 0, 1], 49151)))
-        .await
-    {
-        Ok(d) => d,
-        Err(e) => {
-            ui.log(format!("[安装] 读取本机隧道失败：{e:?}"));
-            fail(&ui, "安装", "无法读取设备隧道地址，请展开详情查看原因。");
-            return keep_alive().await;
-        }
-    };
-    let dev = match devices.into_iter().next() {
-        Some((_udid, d)) => d,
-        None => {
-            fail(&ui, "安装", "本机隧道里没有发现设备。");
-            return keep_alive().await;
-        }
-    };
-    let addr: IpAddr = match dev.tunnel_address.parse() {
+    // --- Install: 经本机隧道 + RPPairing 隧道安装到系统 ---
+    // 本机 RPPairing 控制服务地址：LocalDevVPN 默认 10.7.0.1:49152。
+    let tunnel_host = env::var("TNB_TUNNEL_HOST").unwrap_or_else(|_| "10.7.0.1".into());
+    let tunnel_port: u16 = env::var("TNB_TUNNEL_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(49152);
+    let addr = match format!("{tunnel_host}:{tunnel_port}").parse::<SocketAddr>() {
         Ok(a) => a,
         Err(e) => {
-            ui.log(format!("[安装] 隧道地址解析失败 {}: {e}", dev.tunnel_address));
-            fail(&ui, "安装", "隧道地址无效，请展开详情查看原因。");
+            fail(&ui, "安装", &format!("隧道地址无效（{tunnel_host}:{tunnel_port}）：{e}"));
             return keep_alive().await;
         }
     };
-    let provider = TcpProvider {
-        addr,
-        scope_id: None,
-        pairing_file: pf,
-        label: "treenb-bootstrap".into(),
-    };
 
+    ui.set_step("安装", "active", "正在连接本机隧道并安装…");
+    ui.log(format!("[安装] 通过 RPPairing 隧道连接 {addr}，上传并安装 IPA…"));
     let install_ui = ui.clone();
-    let install_progress = move |p: f32| {
-        let u = install_ui.clone();
-        async move {
-            u.set_step("安装", "active", &format!("正在安装… {}%", p as u32));
-        }
+    let progress = move |pct: u32| {
+        install_ui.set_step("安装", "active", &format!("正在安装… {pct}%"));
     };
-    match sideloader
-        .install_app(&provider, signed, false, Some(install_progress), None)
-        .await
-    {
+    match install_with_pairing(&mut pf, addr, &signed, "TreeNB", progress).await {
         Ok(_) => {
             ui.set_step("安装", "done", "已安装到设备");
-            ui.set_step("交接", "done", "证书与配对文件已保留在本机");
+            ui.set_step("交接", "done", "配对文件与证书已保留在本机");
             ui.log("[完成] TreeNB 已安装，请回桌面查看。");
         }
         Err(e) => {
-            let msg = format!("{e:?}");
-            ui.log(format!("[安装失败] {msg}"));
+            ui.log(format!("[安装失败] {e}"));
             fail(&ui, "安装", "安装失败，请展开详情查看原因。");
         }
     }
 
     keep_alive().await;
+}
+
+/// 执行一次设备端自配对：广播 → 网页显示 PIN → 用户在设置里配对 → 保存配对文件。
+async fn do_self_pair(ui: Arc<WebUI>, rp_path: &PathBuf) -> Result<RpPairingFile, ()> {
+    ui.set_step("安装", "active", "准备设备配对…");
+    ui.patch(|s| s.pairing_active = true);
+    let pin_ui = ui.clone();
+    let evt_ui = ui.clone();
+    let result = pairing::pair_on_device(
+        "TreeNB",
+        "Mac17,7",
+        move |pin| {
+            // 把 6 位配对码显示到网页，供用户在「设置」里输入。
+            pin_ui.show_pin(&pin);
+        },
+        move |line| evt_ui.log(line),
+    )
+    .await;
+    ui.patch(|s| s.pairing_active = false);
+    match result {
+        Ok(r) => {
+            ui.hide_pin();
+            ui.log("[配对] 配对成功，正在保存配对文件…");
+            if let Err(e) = save_pairing_file(&r.pairing_file, rp_path).await {
+                ui.log(format!("[配对] {e}"));
+                fail(&ui, "安装", "配对成功但保存失败，请展开详情查看原因。");
+                return Err(());
+            }
+            ui.log(format!("[配对] 配对文件已保存：{}", rp_path.display()));
+            Ok(r.pairing_file)
+        }
+        Err(e) => {
+            ui.log(format!("[配对失败] {e}"));
+            fail(&ui, "安装", "设备配对失败，请展开详情查看原因。");
+            Err(())
+        }
+    }
 }
 
 fn fail(ui: &WebUI, step: &str, detail: &str) {
