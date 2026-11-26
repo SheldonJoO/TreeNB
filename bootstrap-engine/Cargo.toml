@@ -8,7 +8,9 @@ description = "On-device signing & install engine for TreeNB, running inside Ope
 # isideload: MIT, by nab138 (also powers iloader.app). Apple ID login + sign + install.
 isideload = { version = "0.5.2", default-features = false, features = ["install", "fs-storage", "tokio-mt"] }
 # idevice: MIT, by jkcoxson. TCP provider for Open Minis (no USB on iPhone).
-idevice = { version = "0.1.61", default-features = false, features = ["tcp", "ring", "afc", "installation_proxy", "rsd", "remote_pairing", "tunneld"] }
+idevice = { version = "0.1.61", default-features = false, features = ["tcp", "ring", "afc", "installation_proxy", "rsd", "remote_pairing", "tunneld", "tunnel_tcp_stack"] }
+# mdns-sd: MoQ, by mdnssd. 广播 _remotepairing-pairable-host._tcp（iOS 27 设备端配对发现用）。
+mdns-sd = "0.19"
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "fs", "io-util", "net", "time", "sync"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tracing = "0.1.44"
