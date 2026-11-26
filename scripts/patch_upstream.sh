@@ -1097,8 +1097,9 @@ PY
   fi
 fi
 
-# B1g5. 闪屏治标：SceneDelegate.sceneWillEnterForeground 在最早时机盖快照遮罩，
-#       等 reconcileInstalledApps 完成后淡出。治本见 B1g4。
+# B1g5. 闪屏治标：SceneDelegate.sceneWillEnterForeground 在最早时机盖【统一品牌启动画面】，
+#       等 reconcileInstalledApps 完成后淡出。遮罩不再是快照，内容与底层重建无关，
+#       靠最短展示 0.35s + 1.5s 兜底把中间态全藏住。治本见 B1g4。
 if [ -f "$SCENEDELEGATE" ]; then
   python3 - "$SCENEDELEGATE" <<'PY'
 import sys
@@ -1114,7 +1115,7 @@ anchor = '''        guard DatabaseManager.shared.isStarted else { return }
             await WidgetDataManager.publishCurrentInstalledAppsIfNeeded(in: DatabaseManager.shared.viewContext)
         }
     }'''
-replacement = '''        // TreeNB anti-flicker: 盖住主题重绘的第一帧（1.2s 兜底自动撤）。
+replacement = '''        // TreeNB anti-flicker: 盖住重建/快照交接的中间态（统一品牌画面，1.5s 兜底自动撤）。
         TNBFlickerGuard.cover()
         guard DatabaseManager.shared.isStarted else { return }
 
@@ -1135,7 +1136,53 @@ else:
 PY
   grep -q 'TNBFlickerGuard.cover()' "$SCENEDELEGATE" \
     || { echo "FATAL[B1g5]: 闪屏遮罩接入失败" >&2; exit 2; }
-  ok "闪屏治标：切前台快照遮罩已接入 SceneDelegate"
+  ok "闪屏治标：切前台品牌遮罩已接入 SceneDelegate"
+fi
+
+# B1g6. 闪屏第一帧：用品牌化 LaunchScreen.storyboard 覆盖上游纯白启动屏。
+#       上游 LaunchScreen 背景写死白色（Appearance=light），深色模式冷启动闪白光；
+#       配合 config plist / project.yml 移除 UILaunchScreen:{}（它会覆盖 storyboard），
+#       冷启动第一帧即 TreeNB 品牌 + 跟随系统深浅，杜绝白闪。
+LAUNCHSB="$SSS/AltStore/iOS/LaunchScreen.storyboard"
+if [ -f "$ROOT/config/LaunchScreen.storyboard" ] && [ -f "$LAUNCHSB" ]; then
+  cp "$ROOT/config/LaunchScreen.storyboard" "$LAUNCHSB"
+  grep -q 'systemBackgroundColor' "$LAUNCHSB" \
+    || { echo "FATAL[B1g6]: 品牌 LaunchScreen 未铺好" >&2; exit 2; }
+  ok "闪屏第一帧：品牌化 LaunchScreen（深浅自适应）已覆盖"
+else
+  echo "FATAL[B1g6]: 缺少 config/LaunchScreen.storyboard 或上游 LaunchScreen" >&2
+  exit 2
+fi
+
+# B1g7. 闪屏冷启动收尾：sceneWillEnterForeground 冷启动时也会 cover，但那时
+#       DatabaseManager 未启动会 guard return，走到不到 Task 里的 reveal —— 靠 1.5s
+#       兜底撤。这里在 splash→主界面 crossDissolve 完成的 completion 里主动 reveal，
+#       让冷启动第一帧的跳变恰好发生在遮罩淡出之前。
+LAUNCHVC="$SSS/AltStore/LaunchViewController.swift"
+if [ -f "$LAUNCHVC" ]; then
+  python3 - "$LAUNCHVC" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+# 在 transitionToMainInterface 的 completion 里（handoff 日志之后）补 reveal。
+anchor = '''            debugLog("[LaunchViewController] Transition complete - exiting LaunchViewController, handing off to the main interface")
+            for child in self.children where child !== destinationVC {'''
+replacement = '''            debugLog("[LaunchViewController] Transition complete - exiting LaunchViewController, handing off to the main interface")
+            // TreeNB anti-flicker: 冷启动首帧跳变已结束，收起品牌遮罩。
+            TNBFlickerGuard.reveal()
+            for child in self.children where child !== destinationVC {'''
+if anchor in s:
+    s = s.replace(anchor, replacement, 1)
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  LaunchViewController.swift: 冷启动收尾 reveal 已注入')
+else:
+    print('  LaunchViewController.swift: 冷启动收尾 reveal 已存在（幂等）')
+PY
+  grep -q 'TNBFlickerGuard.reveal()' "$LAUNCHVC" \
+    || { echo "FATAL[B1g7]: 冷启动收尾 reveal 接入失败" >&2; exit 2; }
+  ok "闪屏冷启动：splash 交接完成后主动 reveal 已接入"
 fi
 
 # B1g4. 闪屏治本：ShellTheme.applyAppearance(to:) 原本每次都无条件写
