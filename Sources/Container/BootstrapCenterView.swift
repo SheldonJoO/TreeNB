@@ -132,6 +132,15 @@ struct BootstrapCenterView: View {
         } message: {
             Text(resultText)
         }
+        .onReceive(NotificationCenter.default.publisher(
+            for: TNBDeepLinkRouter.bootstrapDidImport)) { payload in
+            // 从 SideStore/网页深链递来的配对文件：刷新状态并提示结果。
+            if payload.object is String { return } // "open" 只是打开信号
+            hasPairing = PairingFileManager.shared.hasPairingFile()
+            resultText = UserDefaults.standard.string(forKey: "TNBootstrapLastResult")
+                ?? "配对文件状态已更新。"
+            showResult = true
+        }
     }
 
     /// 把所有能自动化的步骤串成一条龙。
