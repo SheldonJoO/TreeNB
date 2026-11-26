@@ -34,6 +34,10 @@
   .certitem .cl{font-size:14px;line-height:1.4}
   .certitem .cs{color:var(--mut);font-size:12px;word-break:break-all}
   .primary{background:var(--blue);color:#fff}
+  .pin{font:700 46px/1.1 ui-monospace,monospace;letter-spacing:10px;text-align:center;color:var(--green);margin:8px 0 4px}
+  .pairstep{font-size:14px;line-height:1.6;color:var(--txt);margin:10px 0}
+  .pairstep b{color:var(--blue)}
+  .pairwait{text-align:center;color:var(--mut);font-size:14px;padding:18px 0}
   .foot{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 30px;color:var(--mut);font-size:12px}
   .foot label{display:flex;gap:8px;align-items:center}
   pre{display:none;white-space:pre-wrap;word-break:break-all;font:11px/1.5 ui-monospace,monospace;color:var(--mut);padding:0 18px 18px;max-height:180px;overflow:auto}
@@ -49,10 +53,33 @@
   <div class="foot"><label><input type="checkbox" id="details"> 显示详情</label><span>为 TreeNB 打造</span></div>
 </div>
 <div class="mask hide" id="mask"><div class="dlg" id="dlg"></div></div>
+<div class="mask" id="pairmask"><div class="dlg" id="pairdlg"></div></div>
 <script>
 var base = location.pathname.replace(/\/$/, '');
 var lastDlgKey = '';          // 当前已渲染的对话框标识，避免轮询重复重建
+var lastPairKey = '';         // 配对浮层标识，避免轮询重复重建
 function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}
+
+function renderPairing(s){
+  var pm=document.getElementById('pairmask'), pd=document.getElementById('pairdlg');
+  if(!s.pairing_active){ lastPairKey=''; pm.classList.add('hide'); return; }
+  var pk = 'p|'+(s.pairing_pin||'');
+  if(pk!==lastPairKey){
+    lastPairKey=pk;
+    if(s.pairing_pin){
+      pd.innerHTML='<h3>这台 iPhone 的配对码</h3>'+
+        '<div class="pin">'+esc(s.pairing_pin)+'</div>'+
+        '<div class="pairstep">在另一个页面：<br>设置 → 隐私与安全性 → 开发者模式 → <b>与主机配对</b> → 选择 <b>TreeNB</b> → 配对</div>'+
+        '<div class="pairstep">先输入 <b>锁屏密码</b>，再输入上面这 <b>6 位配对码</b>。</div>'+
+        '<div class="pairstep" style="color:var(--mut);font-size:13px">配对码告你后会自动安装，不用回到这里点任何按钮。</div>';
+    } else {
+      pd.innerHTML='<h3>正在准备设备配对</h3>'+
+        '<div class="pairwait"><div class="dot active" style="margin:0 auto 14px;width:30px;height:30px"></div>正在广播可配对服务，等待系统连接…</div>'+
+        '<div class="pairstep">保持 Open Minis 和本页面在前台，配对码生成后会显示在这里。</div>';
+    }
+  }
+  pm.classList.remove('hide');
+}
 
 function postReply(v){
   // 提交后强制下次 poll 重建对话框（可能是同类型的新问询，如登录失败重试）
@@ -130,10 +157,12 @@ function render(s){
     return '<div class="step">'+dot+'<div class="st"><b>'+esc(st.name)+right+'</b><span>'+esc(st.detail)+'</span></div></div>';
   }).join('');
 
+  renderPairing(s);
+
   var mask=document.getElementById('mask'), dlg=document.getElementById('dlg');
   var certKey = (s.certificates||[]).map(function(c){return c.serial}).join(',');
   var key = s.dialog ? (s.dialog+'|'+(s.prompt||'')+'|'+s.accounts.join(',')+'|'+certKey) : '';
-  if(s.dialog && s.dialog!=='none'){
+  if(s.dialog && s.dialog!=='none' && !s.pairing_active){
     // 关键：同一个对话框只构建一次，轮询绝不碰 input，用户输入才不会被冲掉
     if(key!==lastDlgKey){ lastDlgKey=key; buildDialog(s,dlg,mask); }
     else mask.classList.remove('hide');
