@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>安装 TreeNB · 无需电脑</title>
+<style>
+  :root {
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --ink: #1d1d1f;
+    --sub: #6e6e73;
+    --line: #e5e5ea;
+    --accent: #2f6fed;
+    --green: #1d9e75;
+    --warn: #b45309;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+    line-height: 1.6; padding: 20px 16px 60px;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 8px 0 4px; letter-spacing: -.4px; }
+  .lead { color: var(--sub); font-size: 15px; margin: 0 0 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 18px; margin-bottom: 14px;
+  }
+  .step { display: flex; gap: 12px; align-items: flex-start; }
+  .num {
+    flex: 0 0 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step h2 { font-size: 16px; margin: 2px 0 6px; }
+  .step p { margin: 0 0 8px; font-size: 14px; color: var(--sub); }
+  .btn {
+    display: inline-block; background: var(--accent); color: #fff;
+    border: none; border-radius: 10px; padding: 10px 16px;
+    font-size: 15px; font-weight: 500; text-decoration: none; cursor: pointer;
+  }
+  .btn.ghost { background: #eee; color: var(--ink); }
+  .code {
+    background: #1d1d1f; color: #f5f5f7; border-radius: 10px;
+    padding: 12px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    word-break: break-all; margin: 10px 0; user-select: all;
+  }
+  .note {
+    background: #fff8ed; border: 1px solid #fde3b8; color: #7c4a03;
+    border-radius: 12px; padding: 12px 14px; font-size: 13px; margin-bottom: 14px;
+  }
+  .ok { color: var(--green); font-weight: 600; }
+  a { color: var(--accent); }
+  .foot { color: var(--sub); font-size: 12px; text-align: center; margin-top: 24px; }
+  .badge { display:inline-block; background:#eef4ff; color:var(--accent); border-radius:6px; padding:2px 8px; font-size:12px; margin-left:6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>安装 TreeNB</h1>
+  <p class="lead">全新 iPhone 上也能装。<span class="badge">无需电脑</span><span class="badge">无需越狱</span></p>
+
+  <div class="note" id="status">
+    正在检查你的系统版本…
+  </div>
+
+  <div class="card">
+    <div class="step">
+      <div class="num">1</div>
+      <div>
+        <h2>装两个免费 App</h2>
+        <p>从 App Store 安装 <b>Open Minis</b> 和 <b>LocalDevVPN</b>，都是免费的。它们只是"帮手机自己签名"的工具，不收集你的资料。</p>
+        <a class="btn" href="https://apps.apple.com/app/id6759188481">装 Open Minis</a>
+        <a class="btn ghost" href="https://apps.apple.com/app/id6755608044">装 LocalDevVPN</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">
+      <div class="num">2</div>
+      <div>
+        <h2>在 Open Minis 里跑一条命令</h2>
+        <p>打开 Open Minis → 右上角控制台 → Shell Terminal → 连接 LocalDevVPN，然后粘贴下面这条命令并回车。</p>
+        <div class="code" id="cmd">正在生成安装命令…</div>
+        <button class="btn" id="copy">复制命令</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">
+      <div class="num">3</div>
+      <div>
+        <h2>在自动弹出的网页里登录 Apple ID</h2>
+        <p>命令跑完会在 Minis 浏览器里弹出一个 <b>TreeNB 本地网页</b>（地址是 127.0.0.1 开头）。五步流程会显示在里面：连接 → Apple ID → 签名 → 安装 → 交接。</p>
+        <p>在网页里选 Apple 账户、输入密码；需要时再填一次二次验证码。密码只在本机参与登录与签名，不会上传到任何服务器。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">
+      <div class="num">4</div>
+      <div>
+        <h2>配对：把网页显示的 6 位码填进「设置」</h2>
+        <p>签名完成后，网页会显示一个 <b>6 位配对码</b>。这时切到 <b>设置 → 隐私与安全性 → 开发者模式</b>，点 <b>Pair with TreeNB</b>，先输锁屏密码，再把网页上的 6 位码填进去。</p>
+        <p><b>注意方向：</b>码是 TreeNB 生成给你、由你填进「设置」的，不是短信验证码，也不需要你在网页里等输入框。配对成功后保持 Open Minis 在前台，会自动完成安装。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>为什么还要装两个免费 App？</b><br>
+    Apple 不允许一个 App 自己给自己签名安装，必须有个"种子"来启动这个过程。这两个 App Store 官方 App 就是种子。这是 Apple 的限制，不是 TreeNB 的特殊要求——所有免电脑侧载工具都绕不开这一步。
+  </div>
+
+  <div class="note" id="engineNote">
+    <b>当前进度（v1.4.5）：</b><b>本版修复配对卡住</b>——之前切到「设置」后配对项就消失、密码输完不弹验证码，是因为 iOS 会挂起后台 App、广播被撤回。现在引擎会播放一段静音让 Open Minis 保持运行（<b>请别关播放器</b>），6 位配对码会以通知弹出，你填进「设置 → 开发者模式 → Pair with TreeNB」即可。需 Open Minis 1.16+；证书满可勾选吊销重试；登录自动轮换可用 anisette 服务器。整套引擎自研，不依赖 SideInstaller。
+  </div>
+
+  <p class="foot">TreeNB · 开源免费 · 凭证只在你的设备上处理</p>
+</div>
+
+<script>
+  // 站点托管：命令里的域名与 IPA 地址都取当前页面地址，部署到任何域名都能直接用。
+  var origin = window.location.origin;
+  var path = window.location.pathname.replace(/\/index\.html?$/, '/');
+  if (path.charAt(path.length - 1) !== '/') path += '/';
+  var base = origin + path;
+  // 分享链接需要 sharecode 才能读取静态资源，命令里带上它。
+  // 额外追加版本号 v=1.4.5 破缓存，确保拿到最新脚本 / IPA / 引擎（不是手机里的旧文件）。
+  // 关键：URL 里的 & 在 shell 中是「后台执行」运算符，必须用单引号把每个 URL 包起来，
+  // 否则 wget 只收到 ?sharecode=...，&v=... 会被当成另一条命令，整条命令断裂。
+  var sc = new URLSearchParams(window.location.search).get('sharecode');
+  var q = (sc ? 'sharecode=' + encodeURIComponent(sc) + '&' : '') + 'v=1.4.5';
+  var query = '?' + q;
+  var q1 = "'" + base + 'install-v145.txt' + query + "'";
+  var q2 = "'" + base + 'TreeNB-unsigned.ipa' + query + "'";
+  // 引擎用带版本的文件名：CDN 可能只按路径缓存、忽略 ?v= 参数，
+  // 换文件名才能确保拿到新引擎（否则手机一直下到旧的 v0.3.2）。
+  var q3 = "'" + base + 'treenb-bootstrap-6c1911dd' + query + "'";
+  // 第1参数=IPA，第2参数=引擎ELF（同站托管）。脚本会强制更新本地引擎到最新版。
+  var command = 'wget -qO- ' + q1 + ' | sh -s -- ' + q2 + ' ' + q3;
+  document.getElementById('cmd').textContent = command;
+
+  // 系统版本提示：只有 iOS 27+ 能全程免电脑；旧系统需要电脑做一次配对。
+  var ua = navigator.userAgent;
+  var m = ua.match(/OS (\d+)[._](\d+)/);
+  var status = document.getElementById('status');
+  if (m) {
+    var major = parseInt(m[1], 10);
+    if (major >= 27) {
+      status.innerHTML = '<span class="ok">✓ 检测到 iOS ' + major + '，支持全程免电脑安装。</span>';
+    } else {
+      status.innerHTML = '检测到 iOS ' + major + '。免电脑安装需要 iOS 27+；你的系统可以安装 TreeNB，但首次配对需要用电脑做一次（约 5 分钟）。';
+    }
+  } else {
+    status.textContent = '请用 iPhone 或 iPad 的 Safari 打开本页。';
+  }
+
+  document.getElementById('copy').addEventListener('click', function () {
+    var text = document.getElementById('cmd').textContent;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+    } else {
+      var r = document.createRange();
+      r.selectNode(document.getElementById('cmd'));
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(r);
+    }
+    this.textContent = '已复制 ✓';
+    var btn = this;
+    setTimeout(function () { btn.textContent = '复制命令'; }, 2000);
+  });
+</script>
+</body>
+</html>
