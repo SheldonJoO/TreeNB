@@ -138,7 +138,7 @@ final class TNBInstallEngine {
 
         switch result {
         case .success(let app):
-            let name = app.name ?? app.bundleIdentifier
+            let name = app.name.isEmpty ? app.bundleIdentifier : app.name
             onEvent(.init(stage: .done, progress: 1, message: "安装成功：\(name) ✅"))
             return .success(name)
         case .failure(let error):
