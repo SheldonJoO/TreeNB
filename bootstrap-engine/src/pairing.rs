@@ -93,7 +93,8 @@ impl Advert {
                 .unwrap_or("未提供原因");
             return Err(format!("minis-bonjour 广播失败（{code}）：{msg}"));
         }
-        let data = v.get("data").unwrap_or(&Value::Null);
+        let empty = Value::Null;
+        let data = v.get("data").unwrap_or(&empty);
         let id = data.get("id").and_then(Value::as_str).map(str::to_string);
         let state = data.get("state").and_then(Value::as_str).unwrap_or("");
         let name = data.get("name").and_then(Value::as_str).unwrap_or("");
