@@ -68,7 +68,7 @@ impl Default for Status {
             pairing_pin: String::new(),
             elapsed: 0,
             log: vec![
-                "[TreeNB] 引擎 v0.3.2：配对改用 Open Minis 原生 Bonjour 桥接（iOS 已拒绝容器内组播）。".into(),
+                "[TreeNB] 引擎 v0.3.3：静音保活 + 原生 Bonjour 桥接 + 配对码通知，切到设置也不会断。".into(),
                 "[TreeNB] 本地网页已启动，等待选择 Apple 账户。".into(),
             ],
         }
