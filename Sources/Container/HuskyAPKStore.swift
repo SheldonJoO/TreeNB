@@ -66,10 +66,25 @@ final class HuskyAPKStore: ObservableObject {
         // ObjC int 导入 Swift 为 Int32，需显式转换（dexCount 在 wrapper 是 int）。
         let dex = Int32(report.dexCount ?? 0)
         let supported = HuskyEngine.shared.engineIsSupported(engine, dexCount: dex, abis: abis, libraries: libs)
-        let detail = supported
-            ? (report.summary ?? engine)
-            : "当前不支持：需要 Java 运行时或非 arm 架构"
+        let detail = supported ? (report.summary ?? engine) : Self.unsupportedReason(engine: engine, abis: abis, dexCount: dex)
         return (engine, supported, detail)
+    }
+
+    /// 按扫描结果给出具体原因，避免笼统的「需要 Java 运行时或非 arm 架构」。
+    private static func unsupportedReason(engine: String, abis: [String], dexCount: Int32) -> String {
+        let hasARM = abis.contains { $0 == "arm64-v8a" || $0 == "armeabi-v7a" || $0 == "armeabi" }
+        if !hasARM {
+            return abis.isEmpty
+                ? "未检测到 native 库（可能是纯 Java 应用），翻译层暂不支持"
+                : "仅含 \(abis.joined(separator: "/")) 架构，本翻译层只支持 arm 架构"
+        }
+        if engine == "Unity 6" {
+            return "Unity 6 暂不支持，可尝试 Unity 2022 及更早版本"
+        }
+        if engine == "Java" || dexCount > 0 {
+            return "「\(engine)」需要 Java 运行时，当前引擎暂不支持"
+        }
+        return "「\(engine)」引擎暂不支持"
     }
 
     /// 从文件选择器导入一个或多个 APK。返回新导入的 app id。
@@ -134,6 +149,14 @@ final class HuskyAPKStore: ObservableObject {
                 engine = meta["engine"] as? String ?? engine
                 supported = meta["supported"] as? Bool ?? false
                 detail = meta["detail"] as? String ?? ""
+                // 迁移：旧版缓存的是笼统文案，重扫一次换成具体原因并回写。
+                if detail == "当前不支持：需要 Java 运行时或非 arm 架构" {
+                    let info = describe(apks: apks)
+                    engine = info.engine; supported = info.supported; detail = info.detail
+                    let fresh: [String: Any] = ["label": label, "engine": engine,
+                                               "supported": supported, "detail": detail]
+                    try? JSONSerialization.data(withJSONObject: fresh).write(to: dir.appendingPathComponent("meta.json"))
+                }
             } else {
                 let info = describe(apks: apks)
                 engine = info.engine; supported = info.supported; detail = info.detail

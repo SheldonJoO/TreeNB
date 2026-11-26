@@ -125,7 +125,7 @@ struct HuskyAPKView: View {
         }
         message = app.supported
             ? "已导入「\(app.label)」，点击即可运行"
-            : "已导入「\(app.label)」，但当前引擎不支持：\(app.detail)"
+            : "已导入「\(app.label)」，但无法运行：\(app.detail)"
     }
 
     private struct MessageWrapper: Identifiable { let text: String; var id: String { text } }

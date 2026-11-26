@@ -6,9 +6,11 @@ description = "On-device signing & install engine for TreeNB, running inside Ope
 
 [dependencies]
 # isideload: MIT, by nab138 (also powers iloader.app). Apple ID login + sign + install.
-isideload = { version = "0.5.2", default-features = false, features = ["install", "fs-storage", "tokio-mt"] }
+# 精确锁定：0.5.x 内部 API 曾变更（sign_app 签名、ensure_device_registered），
+# 禁止 cargo update 静默升级导致构建或行为漂移。升级须显式改此处并重新下载引擎。
+isideload = { version = "=0.5.2", default-features = false, features = ["install", "fs-storage", "tokio-mt"] }
 # idevice: MIT, by jkcoxson. TCP provider for Open Minis (no USB on iPhone).
-idevice = { version = "0.1.61", default-features = false, features = ["tcp", "ring", "afc", "installation_proxy", "rsd", "remote_pairing", "tunneld", "tunnel_tcp_stack"] }
+idevice = { version = "=0.1.68", default-features = false, features = ["tcp", "ring", "afc", "installation_proxy", "rsd", "remote_pairing", "tunneld", "tunnel_tcp_stack"] }
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "fs", "io-util", "net", "time", "sync"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tracing = "0.1.44"

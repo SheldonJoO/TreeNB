@@ -30,9 +30,13 @@ jobs:
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross --locked
 
+      - name: Check lock consistency & version pin
+        working-directory: bootstrap-engine
+        run: bash check-build.sh --lock-only
+
       - name: Build static aarch64 ELF
         working-directory: bootstrap-engine
-        run: cross build --release --target aarch64-unknown-linux-musl
+        run: cross build --release --locked --target aarch64-unknown-linux-musl
 
       - name: Inspect binary
         working-directory: bootstrap-engine

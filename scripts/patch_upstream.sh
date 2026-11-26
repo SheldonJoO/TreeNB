@@ -1042,6 +1042,192 @@ else
   warn "未找到 $ABOUT，跳过关于页品牌归一"
 fi
 
+# B1g2. 界面文案品牌归一（本地化 .strings / .storyboard）
+# 背景：B1g 只改了 Swift 代码里的字符串字面量，storyboard 与 .strings 里的
+#       "欢迎使用 openSSS。" 等文案原样显示（真机登录页截图可见）。
+#       upstream 由 prepare_dependencies.sh 每次重拉且被 gitignore，必须在此持久修补。
+# 原则：只改「产品自称」的可界面文案；致谢/版权/License 里的 openSSS 一律保留。
+AUTH_STRINGS="$SSS/AltStore/zh-Hans.lproj/Authentication.strings"
+AUTH_STORY="$SSS/AltStore/Authentication/Authentication.storyboard"
+LOCAL_STRINGS="$SSS/AltStore/zh-Hans.lproj/Localizable.strings"
+if [ -f "$AUTH_STRINGS" ] || [ -f "$AUTH_STORY" ] || [ -f "$LOCAL_STRINGS" ]; then
+  python3 - "$AUTH_STRINGS" "$AUTH_STORY" "$LOCAL_STRINGS" <<'PY'
+import sys
+auth_strings, auth_story, local_strings = sys.argv[1:4]
+
+# 产品自称 → 🌲树应用。仅限引导/登录/VPN/重签等界面可见文案。
+# 注意：不替换致谢、版权、"openSSS Team"、GitHub 链接、"Stand with openSSS" 等。
+reps = [
+    ('欢迎使用 openSSS。', '欢迎使用 🌲树应用。'),
+    ('欢迎使用 openSSS', '欢迎使用 🌲树应用'),
+    ('Welcome to openSSS.', 'Welcome to 🌲TreeNB.'),
+    ('Welcome to openSSS', 'Welcome to 🌲TreeNB'),
+    ('启用 LocalDevVPN，随时随地使用 openSSS。', '启用 LocalDevVPN，随时随地使用 🌲树应用。'),
+    ('重签 openSSS', '重签 🌲树应用'),
+    ('让 openSSS 在你的设备后台保持运行。', '让 🌲树应用 在你的设备后台保持运行。'),
+    ('连接 openSSS VPN 后，应用会在后台自动刷新！', '连接 🌲树应用 VPN 后，应用会在后台自动刷新！'),
+    ('直接从 openSSS 浏览并下载应用。', '直接从 🌲树应用 浏览并下载应用。'),
+    ('启动 openSSS', '启动 🌲树应用'),
+]
+changed = []
+for path in (auth_strings, auth_story, local_strings):
+    try:
+        s = open(path, encoding='utf-8').read()
+    except FileNotFoundError:
+        continue
+    o = s
+    for a, b in reps:
+        s = s.replace(a, b)
+    if s != o:
+        open(path, 'w', encoding='utf-8').write(s)
+        changed.append(path.split('/')[-1])
+print('  界面文案品牌归一：' + ('、'.join(changed) if changed else '无需改动'))
+PY
+  # 校验：登录页大标题必须已是 TreeNB 品牌，且不得残留旧文案
+  if grep -q '欢迎使用 openSSS。' "$AUTH_STRINGS" 2>/dev/null \
+     || grep -q '欢迎使用 openSSS。' "$AUTH_STORY" 2>/dev/null; then
+    echo "FATAL[B1g2]: 登录页仍残留 openSSS 品牌文案" >&2
+    exit 2
+  fi
+  if grep -q 'EI2-V3-zQZ.text" = "欢迎使用 🌲树应用。' "$AUTH_STRINGS" 2>/dev/null \
+     || grep -q 'text="欢迎使用 🌲树应用。"' "$AUTH_STORY" 2>/dev/null; then
+    ok "界面文案品牌归一：登录页 / 引导页 openSSS → 🌲树应用 已校验（致谢保留上游）"
+  else
+    warn "界面文案品牌归一：未找到预期的登录页文案，请人工复核"
+  fi
+fi
+
+# B1g5. 闪屏治标：SceneDelegate.sceneWillEnterForeground 在最早时机盖快照遮罩，
+#       等 reconcileInstalledApps 完成后淡出。治本见 B1g4。
+if [ -f "$SCENEDELEGATE" ]; then
+  python3 - "$SCENEDELEGATE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+
+# 1) 在 guard DatabaseManager.shared.isStarted 之前盖遮罩（冷启动也盖，且 guard return 时兜底会自动撤）。
+anchor = '''        guard DatabaseManager.shared.isStarted else { return }
+        
+        Task {
+            await AppManager.shared.reconcileInstalledApps()
+            await WidgetDataManager.publishCurrentInstalledAppsIfNeeded(in: DatabaseManager.shared.viewContext)
+        }
+    }'''
+replacement = '''        // TreeNB anti-flicker: 盖住主题重绘的第一帧（1.2s 兜底自动撤）。
+        TNBFlickerGuard.cover()
+        guard DatabaseManager.shared.isStarted else { return }
+
+        Task {
+            await AppManager.shared.reconcileInstalledApps()
+            await WidgetDataManager.publishCurrentInstalledAppsIfNeeded(in: DatabaseManager.shared.viewContext)
+            // 重绘与数据刷新完成后再淡出遮罩。
+            TNBFlickerGuard.reveal()
+        }
+    }'''
+if anchor in s:
+    s = s.replace(anchor, replacement, 1)
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  SceneDelegate.swift: 已接入 TNBFlickerGuard（cover + reveal）')
+else:
+    print('  SceneDelegate.swift: 闪屏遮罩已存在（幂等）')
+PY
+  grep -q 'TNBFlickerGuard.cover()' "$SCENEDELEGATE" \
+    || { echo "FATAL[B1g5]: 闪屏遮罩接入失败" >&2; exit 2; }
+  ok "闪屏治标：切前台快照遮罩已接入 SceneDelegate"
+fi
+
+# B1g4. 闪屏治本：ShellTheme.applyAppearance(to:) 原本每次都无条件写
+#       window.overrideUserInterfaceStyle，即使值没变也会触发整棵视图树的 trait 刷新/重绘，
+#       从后台切回前台时肉眼可见「闪一下」。改成只在值真的变化时赋值（幂等短路）。
+THEME_SWIFT="$SSS/AltStore/Shell/ShellTheme.swift"
+if [ -f "$THEME_SWIFT" ]; then
+  python3 - "$THEME_SWIFT" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+old = '''    static func applyAppearance(to window: UIWindow?)
+    {
+        switch appearance
+        {
+        case .system: window?.overrideUserInterfaceStyle = .unspecified
+        case .light: window?.overrideUserInterfaceStyle = .light
+        case .dark: window?.overrideUserInterfaceStyle = .dark
+        }
+    }'''
+new = '''    static func applyAppearance(to window: UIWindow?)
+    {
+        guard let window = window else { return }
+        let target: UIUserInterfaceStyle
+        switch appearance
+        {
+        case .system: target = .unspecified
+        case .light: target = .light
+        case .dark: target = .dark
+        }
+        // Only assign when the value actually changes: writing the same
+        // overrideUserInterfaceStyle still forces a full traitCollection
+        // rebuild of the window's view tree, which shows up as a visible
+        // flash when returning to the foreground (TreeNB anti-flicker).
+        if window.overrideUserInterfaceStyle != target {
+            window.overrideUserInterfaceStyle = target
+        }
+    }'''
+if old in s:
+    s = s.replace(old, new)
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  ShellTheme.swift: applyAppearance 改为幂等短路（消除切前台重绘闪屏）')
+else:
+    print('  ShellTheme.swift: applyAppearance 已是幂等版（幂等）')
+PY
+  grep -q 'Only assign when the value actually changes' "$THEME_SWIFT" \
+    || { echo "FATAL[B1g4]: 主题幂等短路注入失败" >&2; exit 2; }
+  ok "闪屏治本：主题应用改为幂等，避免无变化的 trait 重绘"
+fi
+
+# B1g3. 来源加载提示：上游 Toast 的 detailText 传 nil，用户只看到「部分来源无法加载」
+#       却不知道是哪个/为什么。改为显示错误摘要，并把文案改得更可操作（点击查看）。
+LAUNCHVC="$SSS/AltStore/LaunchViewController.swift"
+if [ -f "$LAUNCHVC" ]; then
+  python3 - "$LAUNCHVC" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+# detailText 用已经算好的 errorDesc（截断，避免 Toast 过长）。
+s = s.replace(
+    'let toastView = ToastView(text: NSLocalizedString("Some sources were unable to load", comment: ""), detailText: nil)',
+    'let shortDetail = String(errorDesc.prefix(80))\n            let toastView = ToastView(text: NSLocalizedString("Some sources were unable to load", comment: ""), detailText: shortDetail)')
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  LaunchViewController.swift: 来源加载失败 Toast 已补充错误摘要')
+else:
+    print('  LaunchViewController.swift: 来源 Toast 已是补充版（幂等）')
+PY
+  grep -q 'detailText: shortDetail' "$LAUNCHVC" \
+    || { echo "FATAL[B1g3]: 来源 Toast 补充失败" >&2; exit 2; }
+  ok "来源加载提示：已补充错误摘要（点击 Toast 仍可进入来源页）"
+fi
+
+# 对应的中文文案：明确告知「点击查看」。
+SRC_STRINGS="$SSS/AltStore/zh-Hans.lproj/Localizable.strings"
+if [ -f "$SRC_STRINGS" ]; then
+  python3 - "$SRC_STRINGS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+s = s.replace('"Some sources were unable to load" = "部分来源无法加载";',
+              '"Some sources were unable to load" = "部分来源无法加载（点击查看）";')
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  来源 Toast 文案已补充「点击查看」')
+PY
+fi
+
 # B1h. 虚拟定位：自 A6 起 IDevice 用带 location_simulation 的自编译产物，
 #     定位链路是真实现（DVT 直连 / Mac 助手），不再需要降级提示。
 #     幂等清理：若上游/历史构建残留了旧版「暂不可用」文案，还原成原文案。
@@ -1207,6 +1393,8 @@ cp "$ROOT/Sources/Container/HuskyGameView.swift"  "$SSS/AltStore/TreeNB/Containe
 # 注意：不再复制 location_simulation_stubs.c —— IDevice 现已用带 location_simulation
 # 的自编译产物（见 build_idevice.sh / A6），再编 C 桩会 duplicate symbol。
 cp "$ROOT/Sources/Compat/SideStoreCompat.swift" "$SSS/AltStore/TreeNB/" 2>/dev/null || true
+# 闪屏抑制遮罩（需在 sceneWillEnterForeground 可见，挂到主 App 源码树根）
+cp "$ROOT/Sources/UI/TNBFlickerGuard.swift" "$SSS/AltStore/TreeNB/" 2>/dev/null || true
 cp "$ROOT/Sources/Widget/"*.swift    "$SSS/AltWidget/TreeNB/"         2>/dev/null || true
 # LC 引擎桥接层挂进 LiveContainer 源码树（framework target 从这里编译）
 mkdir -p "$LC/LiveContainer/TreeNBBridge/include"

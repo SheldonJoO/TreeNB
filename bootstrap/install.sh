@@ -7,7 +7,7 @@
 #   2) 从发布站点下载 TreeNB IPA 与引导引擎（同站托管）
 #   3) 启动引导引擎 → 在 Minis 浏览器弹出本地网页 → 五步交互
 #
-# 说明（v1.4.3，配对加静音保活 + 配对码通知）：
+# 说明（v1.4.5，签名前注册设备到开发者账号，修复 0xe8008015 安装失败）：
 #   - 登录会自动轮换多个 anisette 服务器（国内可直连的优先），修复
 #     -22406 / -20970 这类伪装成"密码错误"的 anisette 服务故障。
 #   - Apple ID 密码 / 二次验证 → 真实登录 → 证书注册 → IPA 签名（isideload）。
@@ -15,12 +15,12 @@
 #   - iOS 27 设备端自配对：广播可配对主机、网页显示 6 位 PIN，
 #     你去 设置 → 开发者模式 → 与主机配对 输入后生成本机配对文件。
 #   - 经本机 RPPairing 隧道（10.7.0.1:49152）把签名 IPA 安装到系统。
-#   - 引擎按版本标记强制更新，避免手机复用旧版；下载链接带版本参数破缓存。
+#   - 引擎按 sha256 精确校验强制更新；文件名内容寻址，彻底绕开 CDN 缓存。
 #   - 全程不依赖 SideInstaller，只借它的"本地网页交互"外形。
 
 set -eu
 
-TNB_BOOTSTRAP_VERSION="1.4.3"
+TNB_BOOTSTRAP_VERSION="1.4.5"
 
 # IPA 地址：优先用第 1 个参数（网页生成的命令会把同站 IPA 绝对地址传进来），
 # 其次用环境变量，最后回退到 GitHub Release 兼容地址。
@@ -77,26 +77,61 @@ ENGINE_TMP="$WORKDIR/.treenb-bootstrap.new"
 if [ -z "$ENGINE_URL" ]; then
   fail "未指定引擎地址（引擎是可选的第 2 个参数 / 同站托管）。"
 fi
-rm -f "$ENGINE_TMP"
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL --retry 3 "$ENGINE_URL" -o "$ENGINE_TMP" || ENGINE_MISSING=1
-else
-  wget -q --tries=3 "$ENGINE_URL" -O "$ENGINE_TMP" || ENGINE_MISSING=1
-fi
-[ "${ENGINE_MISSING:-0}" = "1" ] && rm -f "$ENGINE_TMP"
-[ -s "$ENGINE_TMP" ] || fail "引擎下载失败（空文件），请检查网络后重试。"
+# 候选地址：优先用页面给的，再加内容寻址文件名（哈希）与随机参数。
+# CDN/运营商可能按整个域名缓存大文件，连 ?v= / 新路径都命中旧内容；
+# 内容寻址文件名 treenb-bootstrap-6c1911dd 是全新路径，缓存键必然 miss。
+NONCE=$(date +%s 2>/dev/null)$(od -An -N2 -tx2 /dev/urandom 2>/dev/null | tr -d ' \n')
+case "$ENGINE_URL" in
+  *\?*) SEP='&' ;;
+  *)    SEP='?' ;;
+esac
+ENGINE_CANDIDATES=""
+# 1) 页面给的原始地址（已是哈希文件名）
+ENGINE_CANDIDATES="$ENGINE_CANDIDATES $ENGINE_URL"
+# 2) 强制内容寻址文件名（从任意旧文件名改写），全新缓存键
+CAS=$(printf '%s' "$ENGINE_URL" | sed 's#treenb-bootstrap[^?]*#treenb-bootstrap-6c1911dd#')
+ENGINE_CANDIDATES="$ENGINE_CANDIDATES $CAS"
+# 3) 上面两个各加随机参数兜底
+ENGINE_CANDIDATES="$ENGINE_CANDIDATES ${ENGINE_URL}${SEP}cb=${NONCE} ${CAS}${SEP}cb=${NONCE}"
 
-# 校验是不是真 ELF（前 4 字节 7f 45 4c 46），避免把 WAF 页面当引擎执行。
-MAGIC=$(od -An -tx1 -N4 "$ENGINE_TMP" 2>/dev/null | tr -d ' \n')
-[ "$MAGIC" = "7f454c46" ] || { rm -f "$ENGINE_TMP"; fail "下载到的不是有效的 aarch64 引擎文件（magic=$MAGIC）。"; }
-
-# 版本校验：新引擎内嵌 v0.3.3 标记，旧版是 v0.3.2/v0.3.1/v0.2.0/v0.1.1。grep 不可用则跳过这一层。
-if command -v grep >/dev/null 2>&1; then
-  if ! grep -a -q 'v0.3.3' "$ENGINE_TMP" 2>/dev/null; then
-    rm -f "$ENGINE_TMP"
-    fail "下载到的引擎不是最新版本（缺少 v0.3.3 标记），可能被缓存，请稍后重试。"
+ENGINE_OK=0
+LAST_INFO=""
+# 新引擎 sha256 前缀（内容寻址文件名 c9915119 即取自此哈希）；旧引擎是 a7109494/c9915119。
+EXPECT_SHA="6c1911dd4a1f62f799c5e2147fc34ab121817511b6444c043dc9ffdfd8d1044c"
+for URL in $ENGINE_CANDIDATES; do
+  rm -f "$ENGINE_TMP"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 2 "$URL" -o "$ENGINE_TMP" 2>/dev/null || continue
+  else
+    wget -q --tries=2 "$URL" -O "$ENGINE_TMP" 2>/dev/null || continue
   fi
-fi
+  [ -s "$ENGINE_TMP" ] || { LAST_INFO="空文件：$URL"; continue; }
+  # 校验是不是真 ELF（前 4 字节 7f 45 4c 46），避免把 WAF 页面当引擎执行。
+  MAGIC=$(od -An -tx1 -N4 "$ENGINE_TMP" 2>/dev/null | tr -d ' \n')
+  [ "$MAGIC" = "7f454c46" ] || { LAST_INFO="非 ELF（magic=$MAGIC，可能是 403/缓存页）：$URL"; continue; }
+  ESIZE=$(wc -c < "$ENGINE_TMP" | tr -d ' ')
+  # 完整下载兜底：新引擎 5050840 字节；小于 5MB 视为截断。
+  if [ "${ESIZE:-0}" -lt 5000000 ] 2>/dev/null; then
+    LAST_INFO="文件被截断（size=${ESIZE}）：$URL"; continue
+  fi
+  # 版本校验改用 sha256 精确哈希——busybox 的 grep -a -q 对 5MB 二进制搜索
+  # 会提前退出而误判「未知版本」，把好引擎误杀，故不再用 grep 验版本。
+  LHASH=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    set -- $(sha256sum "$ENGINE_TMP" 2>/dev/null); LHASH="${1:-}"
+  elif command -v shasum >/dev/null 2>&1; then
+    set -- $(shasum -a 256 "$ENGINE_TMP" 2>/dev/null); LHASH="${1:-}"
+  fi
+  if [ -n "$LHASH" ]; then
+    if [ "$LHASH" != "$EXPECT_SHA" ]; then
+      LAST_INFO="sha256 不符（拿到 ${LHASH}，期望 ${EXPECT_SHA}，size=${ESIZE}）：$URL"
+      continue
+    fi
+  fi
+  ENGINE_OK=1
+  break
+done
+[ "$ENGINE_OK" = "1" ] || { rm -f "$ENGINE_TMP"; fail "全部引擎地址均失败。最后一次：${LAST_INFO:-无}。请把这行发我以定位。"; }
 
 mv -f "$ENGINE_TMP" "$ENGINE"
 chmod +x "$ENGINE" || fail "引擎授权失败。"
@@ -108,7 +143,7 @@ say "─────────────────────────
 say "TreeNB 引导引擎已在本机启动。"
 say "请在 Minis 自带浏览器打开终端打印的 127.0.0.1 地址，"
 say "五步流程（连接 → Apple ID → 签名 → 安装 → 交接）会显示在网页里。"
-say "当前 v1.4.3：网页内输入 Apple ID 密码 → 签名 → 设备配对 → 安装。"
+say "当前 v1.4.5：网页内输入 Apple ID 密码 → 设备配对 → 注册设备 → 签名 → 安装。"
 say "配对时会弹播放器放静音，千万别关；6 位码会弹通知，去 设置 → 开发者模式 → Pair with TreeNB 输入。"
 say "需 Open Minis 1.16+ 与 LocalDevVPN 已连接；配对时播放器保持开启即可。"
 say "IPA 已下载到：${IPA}"
