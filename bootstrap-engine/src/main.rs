@@ -21,6 +21,7 @@ use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackParams, TwoF
 use isideload::auth::builder::AppleAccountBuilder;
 use isideload::dev::certificates::DevelopmentCertificate;
 use isideload::dev::developer_session::DeveloperSession;
+use isideload::dev::devices::DevicesApi;
 use isideload::sideload::builder::{
     ExtensionsBehavior, ExtensionsBehaviorSelection, MaxCertsBehavior, TeamSelection,
 };
@@ -30,7 +31,7 @@ use isideload::util::fs_storage::FsStorage;
 
 use idevice::remote_pairing::RpPairingFile;
 
-use pairing::{install_with_pairing, save_pairing_file};
+use pairing::{install_with_pairing, read_device_info, save_pairing_file};
 use web::{CertOption, WebUI};
 
 /// 把 isideload 的证书对象转成网页展示项。serial 为空的证书不能用于吊销，跳过。
@@ -149,7 +150,7 @@ fn main() {
             rt.block_on(run_install(PathBuf::from(ipa)));
         }
         "version" | _ => {
-            println!("treenb-bootstrap 0.3.3 (aarch64-linux-musl)");
+            println!("treenb-bootstrap 0.3.4 (aarch64-linux-musl)");
             println!("usage: treenb-bootstrap <developer-mode|install>");
         }
     }
@@ -327,30 +328,20 @@ async fn run_install(ipa: PathBuf) {
         .delete_app_after_install(false)
         .build();
 
-    let sign_ui = ui.clone();
-    let progress = move |p: f32| {
-        let u = sign_ui.clone();
-        async move {
-            let pct = (p * 100.0) as u32;
-            u.set_step("签名", "active", &format!("正在签名… {}%", pct));
-        }
-    };
-
-    ui.set_step("签名", "active", "正在注册 App ID / 证书 / 描述文件…");
-    let signed = match sideloader
-        .sign_app(ipa, None, false, Some(progress), None, None)
-        .await
-    {
-        Ok((path, _special)) => path,
+    // 本机 RPPairing 控制服务地址：LocalDevVPN 默认 10.7.0.1:49152。
+    // 提前解析，配对后读设备 UDID、安装都要用。
+    let tunnel_host = env::var("TNB_TUNNEL_HOST").unwrap_or_else(|_| "10.7.0.1".into());
+    let tunnel_port: u16 = env::var("TNB_TUNNEL_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(49152);
+    let addr = match format!("{tunnel_host}:{tunnel_port}").parse::<SocketAddr>() {
+        Ok(a) => a,
         Err(e) => {
-            let msg = format!("{e:?}");
-            ui.log(format!("[签名失败] {msg}"));
-            fail(&ui, "签名", "签名失败，请展开详情查看原因。");
+            fail(&ui, "安装", &format!("隧道地址无效（{tunnel_host}:{tunnel_port}）：{e}"));
             return keep_alive().await;
         }
     };
-    ui.set_step("签名", "done", "签名完成，等待安装到设备");
-    ui.log(format!("[签名] 完成：{}", signed.display()));
 
     // --- Pairing: iOS 27 设备端自配对，产出 RpPairingFile ---
     let rp_path = workdir.join("rp_pairing_file.plist");
@@ -376,21 +367,67 @@ async fn run_install(ipa: PathBuf) {
     };
     let mut pf = pf;
 
-    // --- Install: 经本机隧道 + RPPairing 隧道安装到系统 ---
-    // 本机 RPPairing 控制服务地址：LocalDevVPN 默认 10.7.0.1:49152。
-    let tunnel_host = env::var("TNB_TUNNEL_HOST").unwrap_or_else(|_| "10.7.0.1".into());
-    let tunnel_port: u16 = env::var("TNB_TUNNEL_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(49152);
-    let addr = match format!("{tunnel_host}:{tunnel_port}").parse::<SocketAddr>() {
-        Ok(a) => a,
+    // --- 注册设备到 Apple 开发者账号（关键：描述文件必须含本机 UDID）---
+    // isideload 0.5.2 的 sign_app 不会自动注册设备，需手动 ensure_device_registered，
+    // 否则生成的描述文件不含本机 → 安装报 0xe8008015 (no valid provisioning profile)。
+    let (dev_name, dev_udid) = match read_device_info(&mut pf, addr, "TreeNB").await {
+        Ok(v) => v,
         Err(e) => {
-            fail(&ui, "安装", &format!("隧道地址无效（{tunnel_host}:{tunnel_port}）：{e}"));
+            ui.log(format!("[设备信息失败] {e}"));
+            fail(&ui, "安装", "无法读取设备 UDID，请展开详情查看原因。");
             return keep_alive().await;
         }
     };
+    ui.log(format!("[设备] 名称={}，UDID={}…", dev_name, &dev_udid.chars().take(8).collect::<String>()));
+    {
+        let team = match sideloader.get_team().await {
+            Ok(t) => t,
+            Err(e) => {
+                ui.log(format!("[团队获取失败] {e:?}"));
+                fail(&ui, "签名", "无法获取开发者团队，请展开详情查看原因。");
+                return keep_alive().await;
+            }
+        };
+        ui.set_step("签名", "active", "正在把这台设备注册到 Apple 开发者账号…");
+        if let Err(e) = sideloader
+            .get_dev_session()
+            .ensure_device_registered(&team, &dev_name, &dev_udid, None)
+            .await
+        {
+            let msg = format!("{e:?}");
+            ui.log(format!("[设备注册失败] {msg}"));
+            fail(&ui, "签名", "设备注册失败，请展开详情查看原因。");
+            return keep_alive().await;
+        }
+        ui.log("[设备] 已注册到开发者账号，开始签名。");
+    }
 
+    let sign_ui = ui.clone();
+    let progress = move |p: f32| {
+        let u = sign_ui.clone();
+        async move {
+            let pct = (p * 100.0) as u32;
+            u.set_step("签名", "active", &format!("正在签名… {}%", pct));
+        }
+    };
+
+    ui.set_step("签名", "active", "正在注册 App ID / 证书 / 描述文件…");
+    let signed = match sideloader
+        .sign_app(ipa, None, false, Some(progress), None, None)
+        .await
+    {
+        Ok((path, _special)) => path,
+        Err(e) => {
+            let msg = format!("{e:?}");
+            ui.log(format!("[签名失败] {msg}"));
+            fail(&ui, "签名", "签名失败，请展开详情查看原因。");
+            return keep_alive().await;
+        }
+    };
+    ui.set_step("签名", "done", "签名完成，等待安装到设备");
+    ui.log(format!("[签名] 完成：{}", signed.display()));
+
+    // --- Install: 经本机配对隧道把已签名 IPA 安装到系统 ---
     ui.set_step("安装", "active", "正在连接本机隧道并安装…");
     ui.log(format!("[安装] 通过 RPPairing 隧道连接 {addr}，上传并安装 IPA…"));
     let install_ui = ui.clone();
