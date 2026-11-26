@@ -26,6 +26,9 @@
   .dlg{width:100%;max-width:460px;background:var(--card);border-radius:18px;padding:18px}
   .dlg h3{margin:2px 0 14px;font-size:17px;font-weight:600}
   .choice{display:block;width:100%;text-align:left;background:#2c2c2e;color:var(--txt);border:0;border-radius:12px;padding:14px 16px;margin-bottom:10px;font-size:15px}
+  .reply{width:100%;background:#2c2c2e;color:var(--txt);border:1px solid #48484a;border-radius:12px;padding:14px 16px;margin-bottom:12px;font-size:15px;outline:none}
+  .reply:focus{border-color:var(--blue)}
+  .primary{background:var(--blue);color:#fff}
   .foot{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 30px;color:var(--mut);font-size:12px}
   .foot label{display:flex;gap:8px;align-items:center}
   pre{display:none;white-space:pre-wrap;word-break:break-all;font:11px/1.5 ui-monospace,monospace;color:var(--mut);padding:0 18px 18px;max-height:180px;overflow:auto}
@@ -54,6 +57,7 @@ function render(s){
     return '<div class="step">'+dot+'<div class="st"><b>'+esc(st.name)+right+'</b><span>'+esc(st.detail)+'</span></div></div>';
   }).join('');
   var mask=document.getElementById('mask'), dlg=document.getElementById('dlg');
+  function postReply(v){fetch(base+'/reply',{method:'POST',body:v}).then(poll); mask.classList.add('hide')}
   if(s.dialog==='account-picker'){
     var html='<h3>使用哪个 Apple 账户登录？</h3>';
     s.accounts.forEach(function(a){html+='<button class="choice" data-account="'+esc(a)+'">'+esc(a)+'</button>'});
@@ -64,14 +68,24 @@ function render(s){
     dlg.querySelectorAll('[data-account]').forEach(function(b){b.onclick=function(){
       var email=this.getAttribute('data-account');
       if(email==='__new__'){email=prompt('请输入 Apple ID 邮箱')||''; if(!email)return;}
-      fetch(base+'/account',{method:'POST',body:email}).then(poll);
-      mask.classList.add('hide');
+      postReply(email);
     }});
-    dlg.querySelector('[data-action="back"]').onclick=function(){mask.classList.add('hide')};
+    dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
     dlg.querySelector('[data-action="forget"]').onclick=function(){alert('账号管理即将开放')};
+  } else if(s.dialog==='password'||s.dialog==='code'){
+    var isCode=s.dialog==='code';
+    dlg.innerHTML='<h3>'+esc(s.prompt)+'</h3><input class="reply" id="replyInput" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="'+(isCode?'验证码':'Apple ID 密码')+'"><button class="choice primary" data-action="submit">确认</button><button class="choice" data-action="back">取消</button>';
+    mask.classList.remove('hide');
+    var input=document.getElementById('replyInput');
+    try{input.focus()}catch(e){}
+    dlg.querySelector('[data-action="submit"]').onclick=function(){
+      var v=input.value.trim(); if(!v)return; postReply(v);
+    };
+    input.onkeydown=function(e){if(e.key==='Enter'){var v=input.value.trim(); if(v)postReply(v)}};
+    dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
   } else if(s.dialog==='error') {
-    dlg.innerHTML='<h3>出了点问题</h3><button class="choice" data-action="back">返回</button>';
-    dlg.querySelector('[data-action="back"]').onclick=function(){mask.classList.add('hide')};
+    dlg.innerHTML='<h3>'+esc(s.prompt||'出了点问题')+'</h3><button class="choice" data-action="back">返回</button>';
+    dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
     mask.classList.remove('hide');
   } else { mask.classList.add('hide'); }
   var log=document.getElementById('log');
