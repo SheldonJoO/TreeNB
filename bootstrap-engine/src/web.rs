@@ -1,14 +1,15 @@
 //! Local web UI served by the engine inside Open Minis.
 //!
-//! Mirrors the interaction shape of on-device installers (a loopback-only
-//! HTTP server with a random token path), but is written from scratch here.
-//! The terminal only prints the URL; every user interaction happens in the
-//! page opened in Minis's built-in browser.
+//! Loopback-only HTTP server with a random token path. The terminal only
+//! prints the URL; every user interaction happens in the page opened in
+//! Minis's built-in browser. The page also acts as the prompt channel for
+//! Apple ID password / 2FA codes during the real signing flow.
 
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 
 const UI_HTML: &str = include_str!("ui.html");
 
@@ -25,8 +26,10 @@ pub struct Status {
     pub title: String,
     pub device: String,
     pub steps: Vec<Step>,
-    /// "" when no dialog, otherwise "account-picker" | "error"
+    /// "" when no dialog, otherwise "account-picker" | "password" | "code" | "error"
     pub dialog: String,
+    /// Prompt shown above the dialog input.
+    pub prompt: String,
     pub accounts: Vec<String>,
     pub elapsed: u32,
     pub log: Vec<String>,
@@ -36,21 +39,21 @@ impl Default for Status {
     fn default() -> Self {
         Self {
             title: "TreeNB 引导".into(),
-            device: "已连接本机（引擎外壳验证版）".into(),
+            device: "已连接本机 Open Minis".into(),
             steps: vec![
                 Step { name: "连接本机".into(), state: "done".into(), detail: "已连接本机 Open Minis".into() },
                 Step { name: "Apple ID".into(), state: "active".into(), detail: "选择 / 输入 Apple 账户".into() },
-                Step { name: "签名".into(), state: "pending".into(), detail: "签名引擎接入中（本版未开放）".into() },
-                Step { name: "安装".into(), state: "pending".into(), detail: "安装引擎接入中（本版未开放）".into() },
+                Step { name: "签名".into(), state: "pending".into(), detail: "等待 Apple ID 登录".into() },
+                Step { name: "安装".into(), state: "pending".into(), detail: "等待签名完成".into() },
                 Step { name: "交接".into(), state: "pending".into(), detail: "配对文件交接接入中".into() },
             ],
             dialog: "account-picker".into(),
+            prompt: String::new(),
             accounts: Vec::new(),
             elapsed: 0,
             log: vec![
-                "[TreeNB] 引擎外壳验证版 v0.1.1（中文界面）".into(),
-                "[TreeNB] 本地网页已成功启动 —— 这一步验证通过即说明 ELF 可在 Open Minis 运行。".into(),
-                "[TreeNB] 配对 / 登录 / 签名 / 安装逻辑正在接入，本版选账号不会真正安装。".into(),
+                "[TreeNB] 引擎 v0.2.0：Apple ID 登录与签名链路已接入。".into(),
+                "[TreeNB] 本地网页已启动，等待选择 Apple 账户。".into(),
             ],
         }
     }
@@ -59,27 +62,32 @@ impl Default for Status {
 pub struct WebUI {
     pub url: String,
     state: Arc<Mutex<Status>>,
+    pending: Arc<Mutex<Option<oneshot::Sender<String>>>>,
 }
 
 impl WebUI {
     /// Bind an ephemeral loopback port and generate a 128-bit token path.
-    pub async fn start() -> std::io::Result<Self> {
+    pub async fn start() -> std::io::Result<Arc<Self>> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let token = random_token();
         let url = format!("http://127.0.0.1:{}/{}/", port, token);
-        let state = Arc::new(Mutex::new(Status::default()));
+        let ui = Arc::new(Self {
+            url,
+            state: Arc::new(Mutex::new(Status::default())),
+            pending: Arc::new(Mutex::new(None)),
+        });
 
         let srv_token = token.clone();
-        let srv_state = state.clone();
+        let srv_ui = ui.clone();
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((socket, _)) => {
                         let t = srv_token.clone();
-                        let st = srv_state.clone();
+                        let u = srv_ui.clone();
                         tokio::spawn(async move {
-                            let _ = serve(socket, t, st).await;
+                            let _ = serve(socket, t, u).await;
                         });
                     }
                     Err(_) => break,
@@ -87,7 +95,7 @@ impl WebUI {
             }
         });
 
-        Ok(Self { url, state })
+        Ok(ui)
     }
 
     pub fn status(&self) -> Status {
@@ -97,6 +105,47 @@ impl WebUI {
     pub fn patch(&self, mutate: impl FnOnce(&mut Status)) {
         if let Ok(mut s) = self.state.lock() {
             mutate(&mut s);
+        }
+    }
+
+    /// Update one of the five pipeline steps.
+    pub fn set_step(&self, name: &str, state: &str, detail: &str) {
+        self.patch(|s| {
+            if let Some(step) = s.steps.iter_mut().find(|x| x.name == name) {
+                step.state = state.into();
+                step.detail = detail.into();
+            }
+        });
+    }
+
+    /// Append a line to the "Show details" log.
+    pub fn log(&self, line: impl Into<String>) {
+        let line = line.into();
+        self.patch(|s| s.log.push(line));
+    }
+
+    /// Show a dialog and wait for the user's answer from the page.
+    pub async fn ask(&self, dialog: &str, prompt: &str) -> String {
+        let (tx, rx) = oneshot::channel();
+        self.patch(|s| {
+            s.dialog = dialog.into();
+            s.prompt = prompt.into();
+        });
+        if let Ok(mut p) = self.pending.lock() {
+            *p = Some(tx);
+        }
+        rx.await.unwrap_or_default()
+    }
+
+    /// Resolve the currently pending dialog.
+    fn submit(&self, value: String) {
+        let tx = self.pending.lock().ok().and_then(|mut p| p.take());
+        self.patch(|s| {
+            s.dialog.clear();
+            s.prompt.clear();
+        });
+        if let Some(tx) = tx {
+            let _ = tx.send(value);
         }
     }
 }
@@ -114,7 +163,7 @@ fn random_token() -> String {
 async fn serve(
     mut socket: tokio::net::TcpStream,
     token: String,
-    state: Arc<Mutex<Status>>,
+    ui: Arc<WebUI>,
 ) -> std::io::Result<()> {
     let mut raw = Vec::new();
     let mut tmp = [0u8; 4096];
@@ -171,26 +220,13 @@ async fn serve(
                 UI_HTML.to_string(),
             ),
             ("GET", "status") => {
-                let json = serde_json::to_string(&state.lock().map(|s| s.clone()).unwrap_or_default())
+                let json = serde_json::to_string(&ui.status())
                     .unwrap_or_else(|_| "{}".into());
                 ("HTTP/1.1 200 OK", "application/json; charset=utf-8", json)
             }
-            ("POST", "account") => {
-                let email = String::from_utf8_lossy(body).trim().to_string();
-                if !email.is_empty() {
-                    if let Ok(mut s) = state.lock() {
-                        s.accounts.retain(|a| a != &email);
-                        s.accounts.insert(0, email.clone());
-                        s.dialog.clear();
-                        if let Some(step) = s.steps.iter_mut().find(|x| x.name == "Apple ID") {
-                            step.state = "done".into();
-                            step.detail = format!("已记录 {}（仅本机暂存）", email);
-                        }
-                        let chosen = s.accounts.first().cloned().unwrap_or_default();
-                        s.log.push(format!("[账号] 已暂存：{}（外壳验证版，未发起真实登录）", chosen));
-                        s.log.push("[提示] 真实 Apple ID 登录 / 签名 / 安装逻辑接入中，本版到此为止。".into());
-                    }
-                }
+            ("POST", "reply") | ("POST", "account") => {
+                let value = String::from_utf8_lossy(body).trim().to_string();
+                ui.submit(value);
                 ("HTTP/1.1 200 OK", "application/json", "{\"ok\":true}".into())
             }
             _ => (
