@@ -22,11 +22,11 @@
   .st b{display:block;font-size:15px;font-weight:600}
   .st span{color:var(--mut);font-size:13px}
   .st .right{float:right;color:var(--mut);font-size:13px}
-  .mask{position:absolute;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px}
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px}
   .dlg{width:100%;max-width:460px;background:var(--card);border-radius:18px;padding:18px}
   .dlg h3{margin:2px 0 14px;font-size:17px;font-weight:600}
   .choice{display:block;width:100%;text-align:left;background:#2c2c2e;color:var(--txt);border:0;border-radius:12px;padding:14px 16px;margin-bottom:10px;font-size:15px}
-  .reply{width:100%;background:#2c2c2e;color:var(--txt);border:1px solid #48484a;border-radius:12px;padding:14px 16px;margin-bottom:12px;font-size:15px;outline:none}
+  .reply{width:100%;background:#2c2c2e;color:var(--txt);border:1px solid #48484a;border-radius:12px;padding:14px 16px;margin-bottom:12px;font-size:16px;outline:none}
   .reply:focus{border-color:var(--blue)}
   .primary{background:var(--blue);color:#fff}
   .foot{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 30px;color:var(--mut);font-size:12px}
@@ -46,25 +46,24 @@
 <div class="mask hide" id="mask"><div class="dlg" id="dlg"></div></div>
 <script>
 var base = location.pathname.replace(/\/$/, '');
+var lastDlgKey = '';          // 当前已渲染的对话框标识，避免轮询重复重建
 function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}
-function render(s){
-  document.getElementById('steps').innerHTML = s.steps.map(function(st){
-    var dot = st.state==='done' ? '<div class="dot done">✓</div>'
-            : st.state==='active' ? '<div class="dot active"></div>'
-            : st.state==='error' ? '<div class="dot done" style="background:#ff453a;border-color:#ff453a">!</div>'
-            : '<div class="dot"></div>';
-    var right = (st.state==='active' && s.elapsed) ? '<span class="right">'+s.elapsed+'s</span>' : '';
-    return '<div class="step">'+dot+'<div class="st"><b>'+esc(st.name)+right+'</b><span>'+esc(st.detail)+'</span></div></div>';
-  }).join('');
-  var mask=document.getElementById('mask'), dlg=document.getElementById('dlg');
-  function postReply(v){fetch(base+'/reply',{method:'POST',body:v}).then(poll); mask.classList.add('hide')}
+
+function postReply(v){
+  // 提交后强制下次 poll 重建对话框（可能是同类型的新问询，如登录失败重试）
+  lastDlgKey = '';
+  fetch(base+'/reply',{method:'POST',body:v}).then(poll);
+  document.getElementById('mask').classList.add('hide');
+}
+
+function buildDialog(s, dlg, mask){
   if(s.dialog==='account-picker'){
     var html='<h3>使用哪个 Apple 账户登录？</h3>';
     s.accounts.forEach(function(a){html+='<button class="choice" data-account="'+esc(a)+'">'+esc(a)+'</button>'});
     html+='<button class="choice" data-account="__new__">使用其他 Apple 账户</button>';
     html+='<button class="choice" data-action="forget">移除某个 Apple 账户</button>';
     html+='<button class="choice" data-action="back">返回</button>';
-    dlg.innerHTML=html; mask.classList.remove('hide');
+    dlg.innerHTML=html;
     dlg.querySelectorAll('[data-account]').forEach(function(b){b.onclick=function(){
       var email=this.getAttribute('data-account');
       if(email==='__new__'){email=prompt('请输入 Apple ID 邮箱')||''; if(!email)return;}
@@ -74,20 +73,47 @@ function render(s){
     dlg.querySelector('[data-action="forget"]').onclick=function(){alert('账号管理即将开放')};
   } else if(s.dialog==='password'||s.dialog==='code'){
     var isCode=s.dialog==='code';
-    dlg.innerHTML='<h3>'+esc(s.prompt)+'</h3><input class="reply" id="replyInput" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="'+(isCode?'验证码':'Apple ID 密码')+'"><button class="choice primary" data-action="submit">确认</button><button class="choice" data-action="back">取消</button>';
-    mask.classList.remove('hide');
+    dlg.innerHTML='<h3>'+esc(s.prompt)+'</h3>'+
+      '<input class="reply" id="replyInput" type="'+(isCode?'text':'password')+'" '+
+      'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" '+
+      'placeholder="'+(isCode?'6 位验证码':'Apple ID 密码')+'">'+
+      '<button class="choice primary" data-action="submit">确认</button>'+
+      '<button class="choice" data-action="back">取消</button>';
     var input=document.getElementById('replyInput');
+    // 只在首次建框时聚焦一次：轮询里反复 focus 会让 iOS 键盘/输入被打断
     try{input.focus()}catch(e){}
     dlg.querySelector('[data-action="submit"]').onclick=function(){
       var v=input.value.trim(); if(!v)return; postReply(v);
     };
     input.onkeydown=function(e){if(e.key==='Enter'){var v=input.value.trim(); if(v)postReply(v)}};
     dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
-  } else if(s.dialog==='error') {
+  } else if(s.dialog==='error'){
     dlg.innerHTML='<h3>'+esc(s.prompt||'出了点问题')+'</h3><button class="choice" data-action="back">返回</button>';
     dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
-    mask.classList.remove('hide');
-  } else { mask.classList.add('hide'); }
+  }
+  mask.classList.remove('hide');
+}
+
+function render(s){
+  document.getElementById('steps').innerHTML = s.steps.map(function(st){
+    var dot = st.state==='done' ? '<div class="dot done">✓</div>'
+            : st.state==='active' ? '<div class="dot active"></div>'
+            : st.state==='error' ? '<div class="dot done" style="background:#ff453a;border-color:#ff453a">!</div>'
+            : '<div class="dot"></div>';
+    var right = (st.state==='active' && s.elapsed) ? '<span class="right">'+s.elapsed+'s</span>' : '';
+    return '<div class="step">'+dot+'<div class="st"><b>'+esc(st.name)+right+'</b><span>'+esc(st.detail)+'</span></div></div>';
+  }).join('');
+
+  var mask=document.getElementById('mask'), dlg=document.getElementById('dlg');
+  var key = s.dialog ? (s.dialog+'|'+(s.prompt||'')+'|'+s.accounts.join(',')) : '';
+  if(s.dialog && s.dialog!=='none'){
+    // 关键：同一个对话框只构建一次，轮询绝不碰 input，用户输入才不会被冲掉
+    if(key!==lastDlgKey){ lastDlgKey=key; buildDialog(s,dlg,mask); }
+    else mask.classList.remove('hide');
+  } else {
+    lastDlgKey=''; mask.classList.add('hide');
+  }
+
   var log=document.getElementById('log');
   log.textContent=s.log.join('\n');
   log.className=document.getElementById('details').checked?'show':'';
