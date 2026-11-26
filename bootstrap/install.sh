@@ -7,7 +7,9 @@
 #   2) 从发布站点下载 TreeNB IPA 与引导引擎（同站托管）
 #   3) 启动引导引擎 → 在 Minis 浏览器弹出本地网页 → 五步交互
 #
-# 说明（v1.4.0，完整链路已接入）：
+# 说明（v1.4.1，完整链路已接入）：
+#   - 登录会自动轮换多个 anisette 服务器（国内可直连的优先），修复
+#     -22406 / -20970 这类伪装成"密码错误"的 anisette 服务故障。
 #   - Apple ID 密码 / 二次验证 → 真实登录 → 证书注册 → IPA 签名（isideload）。
 #   - 证书满时网页列出旧证书供勾选吊销，自动重试。
 #   - iOS 27 设备端自配对：广播可配对主机、网页显示 6 位 PIN，
@@ -18,7 +20,7 @@
 
 set -eu
 
-TNB_BOOTSTRAP_VERSION="1.4.0"
+TNB_BOOTSTRAP_VERSION="1.4.1"
 
 # IPA 地址：优先用第 1 个参数（网页生成的命令会把同站 IPA 绝对地址传进来），
 # 其次用环境变量，最后回退到 GitHub Release 兼容地址。
@@ -88,11 +90,11 @@ fi
 MAGIC=$(od -An -tx1 -N4 "$ENGINE_TMP" 2>/dev/null | tr -d ' \n')
 [ "$MAGIC" = "7f454c46" ] || { rm -f "$ENGINE_TMP"; fail "下载到的不是有效的 aarch64 引擎文件（magic=$MAGIC）。"; }
 
-# 版本校验：新引擎内嵌 v0.3.0 标记，旧外壳是 v0.1.1/v0.2.0。grep 不可用则跳过这一层。
+# 版本校验：新引擎内嵌 v0.3.1 标记，旧外壳是 v0.1.1/v0.2.0。grep 不可用则跳过这一层。
 if command -v grep >/dev/null 2>&1; then
-  if ! grep -a -q 'v0.3.0' "$ENGINE_TMP" 2>/dev/null; then
+  if ! grep -a -q 'v0.3.1' "$ENGINE_TMP" 2>/dev/null; then
     rm -f "$ENGINE_TMP"
-    fail "下载到的引擎不是最新版本（缺少 v0.3.0 标记），可能被缓存，请稍后重试。"
+    fail "下载到的引擎不是最新版本（缺少 v0.3.1 标记），可能被缓存，请稍后重试。"
   fi
 fi
 
@@ -106,7 +108,7 @@ say "─────────────────────────
 say "TreeNB 引导引擎已在本机启动。"
 say "请在 Minis 自带浏览器打开终端打印的 127.0.0.1 地址，"
 say "五步流程（连接 → Apple ID → 签名 → 安装 → 交接）会显示在网页里。"
-say "当前 v1.4.0：网页内输入 Apple ID 密码 → 签名 → 设备自配对 → 安装。"
+say "当前 v1.4.1：网页内输入 Apple ID 密码 → 签名 → 设备自配对 → 安装。"
 say "配对时网页会显示 6 位码，去 设置 → 开发者模式 → 与主机配对 输入。"
 say "首次需要连着 LocalDevVPN（本机隧道 10.7.0.1）。"
 say "IPA 已下载到：${IPA}"
