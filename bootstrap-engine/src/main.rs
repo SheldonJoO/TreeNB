@@ -7,6 +7,7 @@
 //! Ground-up implementation using independent OSS libraries
 //! (isideload MIT, idevice MIT). No siboot / SideInstaller code is used.
 
+mod keepalive;
 mod pairing;
 mod web;
 
@@ -148,7 +149,7 @@ fn main() {
             rt.block_on(run_install(PathBuf::from(ipa)));
         }
         "version" | _ => {
-            println!("treenb-bootstrap 0.3.2 (aarch64-linux-musl)");
+            println!("treenb-bootstrap 0.3.3 (aarch64-linux-musl)");
             println!("usage: treenb-bootstrap <developer-mode|install>");
         }
     }
@@ -361,14 +362,14 @@ async fn run_install(ipa: PathBuf) {
             }
             Err(e) => {
                 ui.log(format!("[设备] 配对文件解析失败，将重新配对：{e:?}"));
-                match do_self_pair(ui.clone(), &rp_path).await {
+                match do_self_pair(ui.clone(), &workdir, &rp_path).await {
                     Ok(pf) => pf,
                     Err(_) => return keep_alive().await,
                 }
             }
         }
     } else {
-        match do_self_pair(ui.clone(), &rp_path).await {
+        match do_self_pair(ui.clone(), &workdir, &rp_path).await {
             Ok(pf) => pf,
             Err(_) => return keep_alive().await,
         }
@@ -412,7 +413,7 @@ async fn run_install(ipa: PathBuf) {
 }
 
 /// 执行一次设备端自配对：广播 → 网页显示 PIN → 用户在设置里配对 → 保存配对文件。
-async fn do_self_pair(ui: Arc<WebUI>, rp_path: &PathBuf) -> Result<RpPairingFile, ()> {
+async fn do_self_pair(ui: Arc<WebUI>, workdir: &PathBuf, rp_path: &PathBuf) -> Result<RpPairingFile, ()> {
     ui.set_step("安装", "active", "准备设备配对…");
     ui.patch(|s| s.pairing_active = true);
     let pin_ui = ui.clone();
@@ -420,6 +421,7 @@ async fn do_self_pair(ui: Arc<WebUI>, rp_path: &PathBuf) -> Result<RpPairingFile
     let result = pairing::pair_on_device(
         "TreeNB",
         "Mac17,7",
+        workdir,
         move |pin| {
             // 把 6 位配对码显示到网页，供用户在「设置」里输入。
             pin_ui.show_pin(&pin);
