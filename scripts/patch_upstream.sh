@@ -1055,10 +1055,11 @@ fi
 AUTH_STRINGS="$SSS/AltStore/zh-Hans.lproj/Authentication.strings"
 AUTH_STORY="$SSS/AltStore/Authentication/Authentication.storyboard"
 LOCAL_STRINGS="$SSS/AltStore/zh-Hans.lproj/Localizable.strings"
-if [ -f "$AUTH_STRINGS" ] || [ -f "$AUTH_STORY" ] || [ -f "$LOCAL_STRINGS" ]; then
-  python3 - "$AUTH_STRINGS" "$AUTH_STORY" "$LOCAL_STRINGS" <<'PY'
+SHELL_AUTH_SWIFT="$SSS/AltStore/Shell/ShellAuthenticationViewController.swift"
+if [ -f "$AUTH_STRINGS" ] || [ -f "$AUTH_STORY" ] || [ -f "$LOCAL_STRINGS" ] || [ -f "$SHELL_AUTH_SWIFT" ]; then
+  python3 - "$AUTH_STRINGS" "$AUTH_STORY" "$LOCAL_STRINGS" "$SHELL_AUTH_SWIFT" <<'PY'
 import sys
-auth_strings, auth_story, local_strings = sys.argv[1:4]
+auth_strings, auth_story, local_strings, shell_auth_swift = sys.argv[1:5]
 
 # 产品自称 → 🌲树应用。仅限引导/登录/VPN/重签等界面可见文案。
 # 注意：不替换致谢、版权、"openSSS Team"、GitHub 链接、"Stand with openSSS" 等。
@@ -1075,7 +1076,7 @@ reps = [
     ('启动 openSSS', '启动 🌲树应用'),
 ]
 changed = []
-for path in (auth_strings, auth_story, local_strings):
+for path in (auth_strings, auth_story, local_strings, shell_auth_swift):
     try:
         s = open(path, encoding='utf-8').read()
     except FileNotFoundError:
@@ -1088,9 +1089,13 @@ for path in (auth_strings, auth_story, local_strings):
         changed.append(path.split('/')[-1])
 print('  界面文案品牌归一：' + ('、'.join(changed) if changed else '无需改动'))
 PY
-  # 校验：登录页大标题必须已是 TreeNB 品牌，且不得残留旧文案
+  # 校验：登录页大标题必须已是 TreeNB 品牌，且不得残留旧文案。
+  # 真机反馈「Welcome to openSSS.」英文源自 ShellAuthenticationViewController 的
+  # NSLocalizedString key（.strings 只改 value 无效），故 Swift 源码 key 也必须归一。
   if grep -q '欢迎使用 openSSS。' "$AUTH_STRINGS" 2>/dev/null \
-     || grep -q '欢迎使用 openSSS。' "$AUTH_STORY" 2>/dev/null; then
+     || grep -q '欢迎使用 openSSS。' "$AUTH_STORY" 2>/dev/null \
+     || grep -q 'Welcome to openSSS' "$SHELL_AUTH_SWIFT" 2>/dev/null \
+     || grep -q '"Welcome to openSSS' "$LOCAL_STRINGS" 2>/dev/null; then
     echo "FATAL[B1g2]: 登录页仍残留 openSSS 品牌文案" >&2
     exit 2
   fi
@@ -1188,6 +1193,57 @@ PY
   grep -q 'TNBFlickerGuard.reveal()' "$LAUNCHVC" \
     || { echo "FATAL[B1g7]: 冷启动收尾 reveal 接入失败" >&2; exit 2; }
   ok "闪屏冷启动：splash 交接完成后主动 reveal 已接入"
+fi
+
+# B1g8. 每个树应用启动时也盖品牌遮罩。
+#       用户反馈：「正在切换」只在退出/切回宿主时有，从 App 列表点图标启动 guest 时没有。
+#       实际 launchAppWithBundleId() 里本就有 TreeLaunchOverlay.hide(after: 0.9)（guest
+#       启动完成后收起），但从未配套 cover —— 只有 widget 深链路径调了 showIfNeeded。
+#       这里在 runApp 之前补 show(name:)，与既有 hide 配对，且 show 内部幂等（window 非空
+#       则不重复创建），不会与 widget 路径冲突。
+APPLISTVIEW="$LC/LiveContainerSwiftUI/Views/AppList/LCAppListView.swift"
+if [ -f "$APPLISTVIEW" ]; then
+  python3 - "$APPLISTVIEW" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+anchor = '''        do {
+            try await appFound.runApp(multitask: nil, containerFolderName: container, urlStr: urlStr, forceJIT: forceJIT)'''
+replacement = '''        // TreeNB anti-flicker: 点图标启动 guest 时也盖统一品牌启动画面，
+        // 遮住宿主 App 列表 → guest 启动页 → guest 界面的中间态。
+        // show 内部幂等，widget 深链已盖过则不会重复创建；下面 runApp 成功后有 hide 配对。
+        TreeLaunchOverlay.show(name: appFound.displayName)
+        do {
+            try await appFound.runApp(multitask: nil, containerFolderName: container, urlStr: urlStr, forceJIT: forceJIT)'''
+if anchor in s:
+    s = s.replace(anchor, replacement, 1)
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  LCAppListView.swift: 点图标启动 guest 已接入 TreeLaunchOverlay.show')
+else:
+    print('  LCAppListView.swift: 启动遮罩已存在（幂等）')
+PY
+  grep -q 'TreeLaunchOverlay.show(name: appFound.displayName)' "$APPLISTVIEW" \
+    || { echo "FATAL[B1g8]: 启动遮罩接入失败" >&2; exit 2; }
+  ok "闪屏启动：每个 guest 启动已接入品牌遮罩"
+else
+  echo "FATAL[B1g8]: 缺少 LCAppListView.swift" >&2
+  exit 2
+fi
+
+# B1g9. 用 git 追踪的 Sources/UI/TreeLaunchOverlay.swift 覆盖 upstream 同名文件。
+#       原因：upstream/ 被 gitignore，CI 每次从远程 clone，本地改 upstream 无效。
+#       B1g8 与 widget 深链都依赖这个文件，且它的遮罩 window 需显式 frame（修穿模）。
+TREE_OVERLAY="$LC/LiveContainerSwiftUI/Utilities/TreeLaunchOverlay.swift"
+if [ -f "$ROOT/Sources/UI/TreeLaunchOverlay.swift" ]; then
+  cp "$ROOT/Sources/UI/TreeLaunchOverlay.swift" "$TREE_OVERLAY"
+  grep -q 'scene.coordinateSpace.bounds' "$TREE_OVERLAY" \
+    || { echo "FATAL[B1g9]: TreeLaunchOverlay 全屏 frame 未挂载" >&2; exit 2; }
+  ok "启动遮罩源码挂载 + 全屏 frame（修穿模）已生效"
+else
+  echo "FATAL[B1g9]: 缺少 Sources/UI/TreeLaunchOverlay.swift" >&2
+  exit 2
 fi
 
 # B1g4. 闪屏治本：ShellTheme.applyAppearance(to:) 原本每次都无条件写

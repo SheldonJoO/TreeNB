@@ -47,6 +47,12 @@ enum TNBFlickerGuard {
               let scene = activeScene() else { return }
 
         let w = UIWindow(windowScene: scene)
+        // 关键：必须显式铺满整个 scene。UIWindow(windowScene:) 初始化时 frame 为 .zero，
+        // 虽然设置 rootViewController 后系统通常会按 scene.bounds 布局，但在切前台早期
+        // scene.coordinateSpace 尚未稳定时会得到小尺寸 —— 表现为「界面被缩在圆角卡片里、
+        // 四周露黑」的穿模。这里显式取 scene 坐标空间全尺寸，并兜底 UIScreen。
+        let fullBounds = scene.coordinateSpace.bounds
+        w.frame = fullBounds.isEmpty ? UIScreen.main.bounds : fullBounds
         // 高于状态栏、悬浮按钮、alert、TreeLaunchOverlay，确保第一帧盖住一切。
         w.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 300)
         w.rootViewController = TNBCoverController()
