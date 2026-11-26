@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 use isideload::auth::apple_account::{TwoFactorCallbackParams, TwoFactorCallbackResponse};
 use isideload::auth::builder::AppleAccountBuilder;
+use isideload::dev::certificates::DevelopmentCertificate;
 use isideload::dev::developer_session::DeveloperSession;
 use isideload::sideload::builder::{
     ExtensionsBehavior, ExtensionsBehaviorSelection, MaxCertsBehavior, TeamSelection,
@@ -26,7 +27,33 @@ use isideload::util::fs_storage::FsStorage;
 use idevice::pairing_file::PairingFile;
 use idevice::provider::TcpProvider;
 
-use web::WebUI;
+use web::{CertOption, WebUI};
+
+/// 把 isideload 的证书对象转成网页展示项。serial 为空的证书不能用于吊销，跳过。
+fn cert_options(certs: &[DevelopmentCertificate]) -> Vec<CertOption> {
+    certs
+        .iter()
+        .filter_map(|c| {
+            let serial = c.serial_number.clone().unwrap_or_default();
+            if serial.is_empty() {
+                return None;
+            }
+            let name = c
+                .name
+                .clone()
+                .or_else(|| c.machine_name.clone())
+                .unwrap_or_else(|| "未命名证书".into());
+            let machine = c.machine_name.clone().unwrap_or_default();
+            let platform = c.certificate_platform.clone().unwrap_or_default();
+            let label = if machine.is_empty() {
+                format!("{} · {}", name, platform)
+            } else {
+                format!("{} · 设备 {} · {}", name, machine, platform)
+            };
+            Some(CertOption { serial, label })
+        })
+        .collect()
+}
 
 fn main() {
     rustls::crypto::ring::default_provider()
@@ -164,13 +191,35 @@ async fn run_install(ipa: PathBuf) {
     let workdir = PathBuf::from(&home).join(".treenb-bootstrap");
     let _ = std::fs::create_dir_all(&workdir);
 
+    // 证书达到 Apple 上限时，弹出证书列表让用户勾选要吊销的旧证书，然后自动重试。
+    let cert_ui = ui.clone();
+    let max_certs_cb: MaxCertsCallbackBox = Box::new(move |certs: Vec<DevelopmentCertificate>| {
+        let u = cert_ui.clone();
+        Box::pin(async move {
+            let options = cert_options(&certs);
+            if options.is_empty() {
+                return Err(rootcause::report!("没有可吊销的证书"));
+            }
+            u.log(format!("[证书] 已达 Apple 上限，列出 {} 个证书供选择", options.len()));
+            let prompt = format!(
+                "Apple 账号的证书已达上限（最多 10 个）。请勾选要吊销的旧证书腾出位置，吊销后会自动重试签名。被吊销证书签过的 App 可能需要重新签名。"
+            );
+            let picked = u.ask_certs(options, &prompt).await;
+            if picked.is_empty() {
+                return Err(rootcause::report!("用户取消吊销证书"));
+            }
+            u.log(format!("[证书] 用户选择吊销 {} 个证书，正在重试…", picked.len()));
+            Ok(Some(picked))
+        })
+    });
+
     let mut sideloader =
         SideloaderBuilder::<MaxCertsCallbackBox, ExtensionsBehaviorCallbackBox>::new(
             dev_session,
             email.clone(),
         )
         .team_selection(TeamSelection::First)
-        .max_certs_behavior(MaxCertsBehavior::Error)
+        .max_certs_behavior(MaxCertsBehavior::Prompt(max_certs_cb))
         .extensions_behavior(ExtensionsBehaviorSelection::Fixed(
             ExtensionsBehavior::RegisterAll,
         ))
