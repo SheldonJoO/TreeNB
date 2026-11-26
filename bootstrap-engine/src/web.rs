@@ -40,6 +40,10 @@ pub struct Status {
     pub accounts: Vec<String>,
     /// 证书满时供用户选择吊销的证书列表。
     pub certificates: Vec<CertOption>,
+    /// 设备端自配对进行中：网页显示配对引导浮层。
+    pub pairing_active: bool,
+    /// 配对码（6 位），由引擎在设备连入后生成；空串表示还在等待设备连接。
+    pub pairing_pin: String,
     pub elapsed: u32,
     pub log: Vec<String>,
 }
@@ -60,9 +64,11 @@ impl Default for Status {
             prompt: String::new(),
             accounts: Vec::new(),
             certificates: Vec::new(),
+            pairing_active: false,
+            pairing_pin: String::new(),
             elapsed: 0,
             log: vec![
-                "[TreeNB] 引擎 v0.2.0：Apple ID 登录与签名链路已接入。".into(),
+                "[TreeNB] 引擎 v0.3.0：Apple ID 登录、签名、设备自配对与隧道安装已接入。".into(),
                 "[TreeNB] 本地网页已启动，等待选择 Apple 账户。".into(),
             ],
         }
@@ -165,6 +171,22 @@ impl WebUI {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect()
+    }
+
+    /// 显示设备端配对码（6 位），供用户在系统设置里输入。
+    pub fn show_pin(&self, pin: &str) {
+        self.patch(|s| {
+            s.pairing_active = true;
+            s.pairing_pin = pin.into();
+        });
+    }
+
+    /// 配对结束，收起配对浮层。
+    pub fn hide_pin(&self) {
+        self.patch(|s| {
+            s.pairing_active = false;
+            s.pairing_pin.clear();
+        });
     }
 
     /// Resolve the currently pending dialog.
