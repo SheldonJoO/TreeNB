@@ -148,7 +148,7 @@ fn main() {
             rt.block_on(run_install(PathBuf::from(ipa)));
         }
         "version" | _ => {
-            println!("treenb-bootstrap 0.3.1 (aarch64-linux-musl)");
+            println!("treenb-bootstrap 0.3.2 (aarch64-linux-musl)");
             println!("usage: treenb-bootstrap <developer-mode|install>");
         }
     }
@@ -442,7 +442,12 @@ async fn do_self_pair(ui: Arc<WebUI>, rp_path: &PathBuf) -> Result<RpPairingFile
         }
         Err(e) => {
             ui.log(format!("[配对失败] {e}"));
-            fail(&ui, "安装", "设备配对失败，请展开详情查看原因。");
+            let detail = if e.contains("minis-bonjour") || e.contains("1.16") {
+                "配对广播失败：请把 Open Minis 升级到 1.16 或更新版本，并保持它在前台后重试。展开详情看原因。"
+            } else {
+                "设备配对失败，请展开详情查看原因。"
+            };
+            fail(&ui, "安装", detail);
             Err(())
         }
     }
