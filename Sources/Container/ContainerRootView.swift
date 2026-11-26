@@ -21,6 +21,7 @@ struct ContainerRootView: View {
     @State private var showCertificate = false
     @State private var showImportMenu = false
     @State private var showAPK = false
+    @State private var showBootstrap = false
 
     var body: some View {
         AdaptiveNavigation {
@@ -74,6 +75,12 @@ struct ContainerRootView: View {
                     .accessibilityLabel("Spike 自检")
                     #endif
                     SwiftUI.Button {
+                        showBootstrap = true
+                    } label: {
+                        Image(systemName: "wand.and.stars")
+                    }
+                    .accessibilityLabel("一键自举中心")
+                    SwiftUI.Button {
                         showCertificate = true
                     } label: {
                         Image(systemName: "key.fill")
@@ -123,6 +130,11 @@ struct ContainerRootView: View {
                                 SwiftUI.Button("完成") { showAPK = false }
                             }
                         }
+                }
+            }
+            .sheet(isPresented: $showBootstrap) {
+                AdaptiveNavigation {
+                    BootstrapCenterView()
                 }
             }
             .confirmationDialog("选择要安装的应用类型", isPresented: $showImportMenu, titleVisibility: .visible) {
