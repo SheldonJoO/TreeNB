@@ -105,8 +105,9 @@
     <div class="step">
       <div class="num">4</div>
       <div>
-        <h2>等网页提示完成</h2>
-        <p>跟随网页提示一步步点即可，全程没有命令行、不用记证书概念。完成后回到桌面查看 TreeNB。</p>
+        <h2>配对：把网页显示的 6 位码填进「设置」</h2>
+        <p>签名完成后，网页会显示一个 <b>6 位配对码</b>。这时切到 <b>设置 → 隐私与安全性 → 开发者模式</b>，点 <b>Pair with TreeNB</b>，先输锁屏密码，再把网页上的 6 位码填进去。</p>
+        <p><b>注意方向：</b>码是 TreeNB 生成给你、由你填进「设置」的，不是短信验证码，也不需要你在网页里等输入框。配对成功后保持 Open Minis 在前台，会自动完成安装。</p>
       </div>
     </div>
   </div>
@@ -117,7 +118,7 @@
   </div>
 
   <div class="note" id="engineNote">
-    <b>当前进度（v1.4.1）：</b>引擎已跑通完整链路：Apple ID 登录、IPA 签名、iOS 27 设备端自配对、经本机隧道安装到系统。<b>本版修复了登录失败</b>——之前报的「密码错误」其实是 anisette 服务（伪装 Mac 的凭据）在国内被限流，现在引擎会自动轮换多个可用服务器（国内可直连优先），登录页会显示正在尝试哪一台。签名时若证书已满会让你勾选吊销再重试；安装时网页会显示 6 位配对码，照提示去「设置 → 隐私与安全性 → 开发者模式 → 与主机配对」输入即可。整套引擎自研，不依赖 SideInstaller。
+    <b>当前进度（v1.4.2）：</b><b>本版修复配对卡住</b>——之前 iOS 设置里能看到「Pair with TreeNB」却一直转圈、连不上，是因为 iPhone 不允许容器自己发组播。现在改用 Open Minis 自带的原生广播能力（需 Open Minis 1.16+），由 App 广播、再把设置的连接转进引擎，配对码就能正常出现。配对码由网页显示、你填进「设置」；证书满时可勾选吊销再重试；登录会自动轮换可用的 anisette 服务器。整套引擎自研，不依赖 SideInstaller。
   </div>
 
   <p class="foot">TreeNB · 开源免费 · 凭证只在你的设备上处理</p>
@@ -130,11 +131,11 @@
   if (path.charAt(path.length - 1) !== '/') path += '/';
   var base = origin + path;
   // 分享链接需要 sharecode 才能读取静态资源，命令里带上它。
-  // 额外追加版本号 v=1.4.1 破缓存，确保拿到最新脚本 / IPA / 引擎（不是手机里的旧文件）。
+  // 额外追加版本号 v=1.4.2 破缓存，确保拿到最新脚本 / IPA / 引擎（不是手机里的旧文件）。
   // 关键：URL 里的 & 在 shell 中是「后台执行」运算符，必须用单引号把每个 URL 包起来，
   // 否则 wget 只收到 ?sharecode=...，&v=... 会被当成另一条命令，整条命令断裂。
   var sc = new URLSearchParams(window.location.search).get('sharecode');
-  var q = (sc ? 'sharecode=' + encodeURIComponent(sc) + '&' : '') + 'v=1.4.1';
+  var q = (sc ? 'sharecode=' + encodeURIComponent(sc) + '&' : '') + 'v=1.4.2';
   var query = '?' + q;
   var q1 = "'" + base + 'install.txt' + query + "'";
   var q2 = "'" + base + 'TreeNB-unsigned.ipa' + query + "'";
