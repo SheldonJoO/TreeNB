@@ -1,24 +1,28 @@
 //! iOS 27 设备端自配对 + RPPairing 隧道安装。
 //!
 //! 纯 Rust 实现，逻辑照搬 idevice 官方 FFI（MIT）的
-//! `ffi/src/pairable_host.rs::pairable_host_accept_with_options` 与
-//! `ffi/src/tunnel_provider.rs::tunnel_create_rppairing` / `finish_tunnel`。
+//! `ffi/src/pairable_host.rs` 与 `ffi/src/tunnel_provider.rs` / `finish_tunnel`。
 //! 没有使用 SideInstaller 的任何代码。
 //!
-//! 配对：广播 `_remotepairing-pairable-host._tcp` → 设备连入 → PairableHost
-//! 完成 SRP pair-setup → 生成 6 位 PIN（回调给网页显示）→ 产出 RpPairingFile。
-//! 安装：用 RpPairingFile 连本机隧道 → pair-verify → TLS-PSK → RSD → installd。
+//! 关键（v0.3.2 修复）：iSH 容器里的 mdns-sd 组播被 iOS 静默拒绝（无 multicast
+//! entitlement），iOS「开发者模式」能看到条目却连不回容器 → 配对码永不生成。
+//! 改用 Open Minis 1.16+ 自带的 `minis-bonjour advertise`：由 App 原生广播 mDNS，
+//! 并把系统设置的入站连接转发到本进程在 127.0.0.1 上的监听端口。
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use idevice::remote_pairing::{
-    PAIRABLE_HOST_SERVICE_TYPE, PairableHost, PairableHostInfo, RemotePairingClient,
-    RpPairingFile, RpPairingSocket, connect_tls_psk_tunnel_native,
+    PairableHost, PairableHostInfo, RemotePairingClient, RpPairingFile, RpPairingSocket,
+    connect_tls_psk_tunnel_native,
 };
 use idevice::rsd::RsdHandshake;
-use mdns_sd::{ServiceDaemon, ServiceInfo};
+use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
+
+/// Settings 浏览的服务类型（不带结尾点，minis-bonjour 要求这个写法）。
+const PAIRABLE_HOST_TYPE: &str = "_remotepairing-pairable-host._tcp";
 
 /// 配对结果：持久化的配对文件 + 主机 altIRK（重连识别用）。
 pub struct PairResult {
@@ -28,7 +32,109 @@ pub struct PairResult {
     pub host_alt_irk: [u8; 16],
 }
 
-/// 在无 computer 的 iPhone 上，广播「可配对主机」并接受这台 iPhone 自身发起的配对。
+/// 一次 minis-bonjour 广播的句柄；Drop 或显式 stop 时撤回服务，避免残留条目
+/// 出现在「开发者模式」里（残留会用旧 authTag，导致下次配对失败）。
+struct Advert {
+    id: Option<String>,
+}
+
+impl Advert {
+    /// 调用 Open Minis 原生桥接：
+    ///   minis-bonjour advertise <type> <name> <port> k=v... --compact
+    /// App 广播 mDNS，并把 iOS 设置的入站连接转发到本机 127.0.0.1:<port>。
+    async fn publish(service_id: &str, port: u16, txt: &[(String, String)]) -> Result<Self, String> {
+        let service_id = service_id.to_string();
+        let txt = txt.to_vec();
+        tokio::task::spawn_blocking(move || Self::publish_blocking(&service_id, port, &txt))
+            .await
+            .map_err(|e| format!("广播任务失败: {e}"))?
+    }
+
+    fn publish_blocking(service_id: &str, port: u16, txt: &[(String, String)]) -> Result<Self, String> {
+        let mut args: Vec<String> = vec![
+            "advertise".into(),
+            PAIRABLE_HOST_TYPE.into(),
+            service_id.into(),
+            port.to_string(),
+        ];
+        for (k, v) in txt {
+            args.push(format!("{k}={v}"));
+        }
+        args.push("--compact".into());
+
+        let out = Command::new("minis-bonjour")
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| {
+                format!(
+                    "无法调用 Open Minis 的原生 Bonjour 桥接（minis-bonjour: {e}）。请把 Open Minis 升级到 1.16 或更新版本后重试。"
+                )
+            })?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let v: Value = serde_json::from_str(text.trim()).map_err(|_| {
+            let err = String::from_utf8_lossy(&out.stderr);
+            format!(
+                "minis-bonjour 返回无法解析的结果：{}{}",
+                text.trim(),
+                if err.trim().is_empty() { String::new() } else { format!("（{err}）") }
+            )
+        })?;
+        if v.get("ok").and_then(Value::as_bool) != Some(true) {
+            let code = v
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let msg = v
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("未提供原因");
+            return Err(format!("minis-bonjour 广播失败（{code}）：{msg}"));
+        }
+        let data = v.get("data").unwrap_or(&Value::Null);
+        let id = data.get("id").and_then(Value::as_str).map(str::to_string);
+        let state = data.get("state").and_then(Value::as_str).unwrap_or("");
+        let name = data.get("name").and_then(Value::as_str).unwrap_or("");
+        if state == "failed" {
+            let why = data
+                .get("failed_reason")
+                .and_then(Value::as_str)
+                .unwrap_or("未提供原因");
+            return Err(format!("minis-bonjour 广播失败：{why}"));
+        }
+        if !name.is_empty() && name != service_id {
+            return Err(format!(
+                "mDNS 实例名被系统改名（期望 {service_id}，实际 {name}），配对可能失败。请关闭其他配对广播后重试。"
+            ));
+        }
+        Ok(Self { id })
+    }
+
+    fn stop(&mut self) {
+        if let Some(id) = self.id.take() {
+            let _ = std::thread::spawn(move || {
+                let _ = Command::new("minis-bonjour")
+                    .args(["stop", &id, "--compact"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            })
+            .join();
+        }
+    }
+}
+
+impl Drop for Advert {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// 在无固定网络的 iPhone 上，通过 Open Minis 原生 Bonjour 广播「可配对主机」，
+/// 接受这台 iPhone 自身发起的配对。
 ///
 /// `on_pin` 在设备连入、PIN 生成时被调用一次，用于把 6 位码显示到网页。
 /// `on_event` 用于把进度写进日志（"广播中" / "设备已连接" / "配对成功"）。
@@ -42,10 +148,11 @@ where
     F: FnOnce(String) + Send + 'static,
     G: Fn(String) + Send + Sync + 'static,
 {
-    // 1) 先绑定端口，mDNS 才能广播真实端口。
-    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0u16))
+    // 1) 监听 127.0.0.1：minis-bonjour 会把系统设置的连接转发到这里。
+    //    容器里直接组播广播的地址 iOS 连不回来，必须走 App 原生桥接。
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0u16))
         .await
-        .map_err(|e| format!("监听端口失败: {e}"))?;
+        .map_err(|e| format!("监听本地端口失败: {e}"))?;
     let port = listener
         .local_addr()
         .map_err(|e| format!("读取端口失败: {e}"))?
@@ -57,28 +164,13 @@ where
     host_info.allows_pinless_pairing = false;
     let host_alt_irk = host_info.alt_irk;
     let service_identifier = pairing_file.identifier.clone();
-    on_event(format!("[配对] 广播服务 _remotepairing-pairable-host._tcp，端口 {port}"));
+    on_event(format!("[配对] 本机监听 127.0.0.1:{port}，正在通过 Open Minis 广播可配对服务…"));
 
-    // 3) 广播 mDNS 服务，让 iOS「设置 → 开发者模式 → 与主机配对」能发现本机。
-    let mdns = ServiceDaemon::new().map_err(|e| format!("mDNS 引擎启动失败: {e}"))?;
-    // Apple 的实例名超过 mdns-sd 默认上限。
-    let _ = mdns.set_service_name_len_max(30);
-    let hostname = format!("idevice-{}.local.", &service_identifier[..8]);
+    // 3) TXT 记录与 idevice FFI 完全一致，交给 App 侧发布。
     let txt = host_info.mdns_txt_records(&service_identifier);
-    let properties: Vec<(&str, &str)> = txt.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    let service_info = ServiceInfo::new(
-        PAIRABLE_HOST_SERVICE_TYPE,
-        &service_identifier,
-        &hostname,
-        "",
-        port,
-        &properties[..],
-    )
-    .map_err(|e| format!("mDNS 服务信息构造失败: {e}"))?
-    .enable_addr_auto();
-    mdns.register(service_info)
-        .map_err(|e| format!("mDNS 广播失败: {e}"))?;
-    on_event("[配对] 已广播：请到 设置 → 隐私与安全性 → 开发者模式 → 与主机配对".into());
+    let mut advert = Advert::publish(&service_identifier, port, &txt).await?;
+    on_event("[配对] 广播已就绪：请到 设置 → 隐私与安全性 → 开发者模式 → 与主机配对".into());
+    on_event("[配对] 请先输入锁屏密码；随后网页会显示 6 位配对码，把它输入到设置里。".into());
 
     // 4) 等设备连入并完成 SRP pair-setup。PIN 通过回调推给网页显示。
     let accept = async {
@@ -99,10 +191,9 @@ where
 
     let result = accept.await;
 
-    // 5) 停止广播。
-    if let Ok(rx) = mdns.shutdown() {
-        let _ = tokio::task::spawn_blocking(move || rx.recv_timeout(std::time::Duration::from_secs(2))).await;
-    }
+    // 5) 撤回广播（无论成功失败），避免下次配对撞到旧条目。
+    advert.stop();
+
     result?;
 
     on_event("[配对] 配对成功，配对文件已生成并保存到本机。".into());
