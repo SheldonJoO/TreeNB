@@ -316,11 +316,11 @@ private struct SystemIPAImporter: UIViewControllerRepresentable {
                             didPickDocumentsAt urls: [URL]) {
             guard let url = urls.first else { return }
             let accessed = url.startAccessingSecurityScopedResource()
-            let copied = try? FileManager.default.copyItem(
-                to: FileManager.default.temporaryDirectory
-                    .appendingPathComponent("tnb-system-install-\(UUID().uuidString).ipa"),
-                from: url
-            )
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tnb-system-install-\(UUID().uuidString).ipa")
+            // FileManager.copyItem 的签名是 (at:to:)，不是 (to:from:)。
+            // 上一版参数写反导致 CI 首次编译时报 "extra argument 'from'" / "missing 'at'"。
+            let copied = try? FileManager.default.copyItem(at: url, to: dest)
             if accessed { url.stopAccessingSecurityScopedResource() }
             controller.dismiss(animated: false) { [weak self] in
                 if let copied { self?.onPick(copied) } else { self?.onCancel() }
