@@ -1,29 +1,35 @@
 #!/bin/sh
 # TreeNB 免电脑首次安装引导脚本（siboot 风格，运行在 Open Minis 的 shell 里）
 #
-# 设计目标：用户只需在 Open Minis 里粘贴一条命令，剩下的全自动。
+# 设计目标：用户只需在 Open Minis 里粘贴一条命令，剩下的都在本地网页里点。
 # 本脚本负责：
 #   1) 检测环境（iOS 版本、下载工具）
-#   2) 从发布站点下载 TreeNB 无签名 IPA（同站托管，不依赖 GitHub Release）
-#   3) 调用签名安装引擎（siboot 兼容接口）完成配对 + 签名 + 安装
+#   2) 从发布站点下载 TreeNB IPA 与引导引擎（同站托管）
+#   3) 启动引导引擎 → 在 Minis 浏览器弹出本地网页 → 五步交互
 #
-# ⚠️ 诚实标注（第一版现状）：
-#   - 步骤 1、2 在本机 shell 里可独立完成，逻辑已写好。
-#   - 步骤 3 的"签名安装引擎"是本项目的自研攻坚点：需要实现与 siboot 等价的
-#     RPPairing 自配对 + anisette 签名 + 本机安装。在引擎就绪前，本脚本会
-#     明确提示"引擎未部署"，不会假装安装成功。
-#   - 不要把它当作已验证的成品；它是一份可执行的集成框架 + 接口约定。
+# ⚠️ 诚实标注（v1.2.1 外壳验证版，网页已中文化）：
+#   - 引擎已从 isideload/idevice 独立开源库编译成 aarch64 静态 ELF，
+#     本地网页能起、账号能选（这一步验证 ELF 可在 Open Minis 运行）。
+#   - 真实的 RPPairing 自配对 + anisette 登录 + 签名 + 安装逻辑仍在接入，
+#     本版选账号后不会真正把 App 装进系统，网页与脚本均如实说明。
+#   - 全程不依赖 SideInstaller，只借它的"本地网页交互"外形。
 
 set -eu
 
-TNB_BOOTSTRAP_VERSION="1.1"
+TNB_BOOTSTRAP_VERSION="1.2.1"
 
 # IPA 地址：优先用第 1 个参数（网页生成的命令会把同站 IPA 绝对地址传进来），
 # 其次用环境变量，最后回退到 GitHub Release 兼容地址。
 SITE_IPA_URL="${1:-${TNB_IPA_URL:-}}"
 IPA_URL="${SITE_IPA_URL:-https://github.com/SheldonJoO/TreeNB/releases/latest/download/TreeNB-unsigned.ipa}"
 WORKDIR="${HOME}/.treenb-bootstrap"
-ENGINE_URL="${TNB_ENGINE_URL:-https://github.com/SheldonJoO/TreeNB/releases/latest/download/tnb-bootstrap-aarch64}"
+# 引擎地址：第 2 个参数（网页同站托管），其次环境变量。引擎是 aarch64 静态 ELF。
+SITE_ENGINE_URL="${2:-${TNB_ENGINE_URL:-}}"
+# 从 IPA URL 推导同站引擎地址（同域名换文件名），避免网页命令改太多。
+if [ -z "$SITE_ENGINE_URL" ] && [ -n "$SITE_IPA_URL" ]; then
+  SITE_ENGINE_URL="${SITE_IPA_URL%TreeNB-unsigned.ipa}treenb-bootstrap"
+fi
+ENGINE_URL="$SITE_ENGINE_URL"
 
 say() { printf '\n[TNB] %s\n' "$*"; }
 fail() { printf '\n[TNB] 错误：%s\n' "$*" >&2; exit 1; }
@@ -58,43 +64,44 @@ fi
 [ -s "$IPA" ] || fail "下载到的 IPA 是空文件。"
 say "IPA 已下载：${IPA}（$(wc -c < "$IPA" | tr -d ' ') 字节）"
 
-# ---- 步骤 3：签名安装引擎 ----
-say "准备签名安装引擎…"
-ENGINE="$WORKDIR/tnb-bootstrap"
-if [ -x "$ENGINE" ]; then
-  say "本机已有引擎，跳过下载。"
-else
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 3 "$ENGINE_URL" -o "$ENGINE" 2>/dev/null \
-      || ENGINE_MISSING=1
-  else
-    wget -q --tries=3 "$ENGINE_URL" -O "$ENGINE" 2>/dev/null \
-      || ENGINE_MISSING=1
-  fi
+# ---- 步骤 3：下载并启动引导引擎 ----
+say "准备引导引擎…"
+ENGINE="$WORKDIR/treenb-bootstrap"
+if [ -z "$ENGINE_URL" ]; then
+  fail "未指定引擎地址（引擎是可选的第 2 个参数 / 同站托管）。"
 fi
-
-if [ "${ENGINE_MISSING:-0}" = "1" ] || [ ! -x "$ENGINE" ]; then
+if [ ! -x "$ENGINE" ]; then
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 "$ENGINE_URL" -o "$ENGINE" || ENGINE_MISSING=1
+  else
+    wget -q --tries=3 "$ENGINE_URL" -O "$ENGINE" || ENGINE_MISSING=1
+  fi
+  [ "${ENGINE_MISSING:-0}" = "1" ] && rm -f "$ENGINE"
+fi
+[ -x "$ENGINE" ] || chmod +x "$ENGINE" 2>/dev/null || true
+if [ ! -x "$ENGINE" ]; then
   rm -f "$ENGINE"
-  cat <<EOF
+  fail "引擎下载或授权失败。请检查网络后重试。"
+fi
+say "引擎已就绪：${ENGINE}（$(wc -c < "$ENGINE" | tr -d ' ') 字节）"
+
+# 校验是不是真 ELF（前 4 字节 7f 45 4c 46），避免把 WAF 页面当引擎执行。
+MAGIC=$(od -An -tx1 -N4 "$ENGINE" 2>/dev/null | tr -d ' \n')
+[ "$MAGIC" = "7f454c46" ] || fail "下载到的不是有效的 aarch64 引擎文件（magic=$MAGIC）。"
+
+cat <<EOF
 
 [TNB] ──────────────────────────────────────────────
-[TNB] IPA 已下载到本机：$IPA
+[TNB] TreeNB 引导引擎已在本机启动。
+[TNB] 请在 Minis 自带浏览器打开终端打印的 127.0.0.1 地址，
+[TNB] 五步流程（连接 → Apple ID → 签名 → 安装 → 交接）会显示在网页里。
 [TNB]
-[TNB] 接下来（当前第一版，需你手动做两步）：
-[TNB]   1) 用你已有的侧载工具安装这个 IPA。
-[TNB]   2) 打开 TreeNB →「我的」页 → 用 Apple ID 登录。
-[TNB]      这一步生成签名证书，之后装 App 都要用它；
-[TNB]      密码只在本机做 SRP 安全登录，不会上传。
-[TNB]   3) 在设置里导入配对文件，完成配置。
-[TNB]
-[TNB] 全自动的"配对+签名+安装"引擎仍在开发中（第一版缺口）：
-[TNB] 需实现 RPPairing 自配对 → anisette 签名 → 本机安装，
-[TNB] 依赖 iOS 27 开发者模式能力的原生组件。
+[TNB] 诚实说明：当前为引擎外壳验证版 —— 网页能起、账号能选，
+[TNB] 但真实的配对 / 登录 / 签名 / 安装逻辑仍在接入中，
+[TNB] 本版选择账号后不会真正把 App 装进系统。
+[TNB] IPA 已下载到：$IPA
 [TNB] ──────────────────────────────────────────────
 EOF
-  exit 0
-fi
 
-say "启动签名安装（首次会要求你在设置里确认配对）…"
-"$ENGINE" install --ipa "$IPA"
-say "安装流程已结束，请回桌面查看 TreeNB。"
+say "启动引导引擎（终端会保持在运行，直到你关闭）…"
+exec "$ENGINE" install --ipa "$IPA"
