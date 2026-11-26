@@ -36,18 +36,22 @@ impl Default for Status {
     fn default() -> Self {
         Self {
             title: "TreeNB 引导".into(),
-            device: "正在连接本机…".into(),
+            device: "已连接本机（引擎外壳验证版）".into(),
             steps: vec![
-                Step { name: "Connect".into(), state: "active".into(), detail: "连接本机".into() },
-                Step { name: "Apple ID".into(), state: "pending".into(), detail: "登录 Apple 账户".into() },
-                Step { name: "Sign".into(), state: "pending".into(), detail: "签名 IPA".into() },
-                Step { name: "Install".into(), state: "pending".into(), detail: "安装到系统".into() },
-                Step { name: "Handover".into(), state: "pending".into(), detail: "写入配对文件".into() },
+                Step { name: "Connect".into(), state: "done".into(), detail: "已连接本机 Open Minis".into() },
+                Step { name: "Apple ID".into(), state: "active".into(), detail: "选择 / 输入 Apple 账户".into() },
+                Step { name: "Sign".into(), state: "pending".into(), detail: "签名引擎接入中（本版未开放）".into() },
+                Step { name: "Install".into(), state: "pending".into(), detail: "安装引擎接入中（本版未开放）".into() },
+                Step { name: "Handover".into(), state: "pending".into(), detail: "配对文件交接接入中".into() },
             ],
-            dialog: String::new(),
+            dialog: "account-picker".into(),
             accounts: Vec::new(),
             elapsed: 0,
-            log: Vec::new(),
+            log: vec![
+                "[TreeNB] 引擎外壳验证版 v0.1.0".into(),
+                "[TreeNB] 本地网页已成功启动 —— 这一步验证通过即说明 ELF 可在 Open Minis 运行。".into(),
+                "[TreeNB] 配对 / 登录 / 签名 / 安装逻辑正在接入，本版选账号不会真正安装。".into(),
+            ],
         }
     }
 }
@@ -180,14 +184,11 @@ async fn serve(
                         s.dialog.clear();
                         if let Some(step) = s.steps.iter_mut().find(|x| x.name == "Apple ID") {
                             step.state = "done".into();
-                            step.detail = "账户已选择".into();
-                        }
-                        if let Some(step) = s.steps.iter_mut().find(|x| x.name == "Sign") {
-                            step.state = "active".into();
-                            step.detail = "正在签名…".into();
+                            step.detail = format!("已记录 {}（仅本机暂存）", email);
                         }
                         let chosen = s.accounts.first().cloned().unwrap_or_default();
-                        s.log.push(format!("account: {}", chosen));
+                        s.log.push(format!("[账号] 已暂存：{}（外壳验证版，未发起真实登录）", chosen));
+                        s.log.push("[提示] 真实 Apple ID 登录 / 签名 / 安装逻辑接入中，本版到此为止。".into());
                     }
                 }
                 ("HTTP/1.1 200 OK", "application/json", "{\"ok\":true}".into())
