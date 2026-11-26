@@ -13,6 +13,13 @@ use tokio::sync::oneshot;
 
 const UI_HTML: &str = include_str!("ui.html");
 
+/// 证书选择器里的一项：serial 用于吊销，label 用于展示。
+#[derive(Clone, Serialize)]
+pub struct CertOption {
+    pub serial: String,
+    pub label: String,
+}
+
 #[derive(Clone, Serialize)]
 pub struct Step {
     pub name: String,
@@ -26,11 +33,13 @@ pub struct Status {
     pub title: String,
     pub device: String,
     pub steps: Vec<Step>,
-    /// "" when no dialog, otherwise "account-picker" | "password" | "code" | "error"
+    /// "" when no dialog, otherwise "account-picker" | "password" | "code" | "cert-picker" | "error"
     pub dialog: String,
     /// Prompt shown above the dialog input.
     pub prompt: String,
     pub accounts: Vec<String>,
+    /// 证书满时供用户选择吊销的证书列表。
+    pub certificates: Vec<CertOption>,
     pub elapsed: u32,
     pub log: Vec<String>,
 }
@@ -50,6 +59,7 @@ impl Default for Status {
             dialog: "account-picker".into(),
             prompt: String::new(),
             accounts: Vec::new(),
+            certificates: Vec::new(),
             elapsed: 0,
             log: vec![
                 "[TreeNB] 引擎 v0.2.0：Apple ID 登录与签名链路已接入。".into(),
@@ -135,6 +145,26 @@ impl WebUI {
             *p = Some(tx);
         }
         rx.await.unwrap_or_default()
+    }
+
+    /// 证书数量达到 Apple 上限时，展示证书列表等待用户勾选要吊销的项。
+    /// 返回值是 serial_number 列表；空列表表示用户取消。
+    pub async fn ask_certs(&self, certs: Vec<CertOption>, prompt: &str) -> Vec<String> {
+        let (tx, rx) = oneshot::channel();
+        self.patch(|s| {
+            s.dialog = "cert-picker".into();
+            s.prompt = prompt.into();
+            s.certificates = certs;
+        });
+        if let Ok(mut p) = self.pending.lock() {
+            *p = Some(tx);
+        }
+        let answer = rx.await.unwrap_or_default();
+        answer
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     /// Resolve the currently pending dialog.
