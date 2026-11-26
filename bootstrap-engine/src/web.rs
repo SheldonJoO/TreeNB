@@ -68,7 +68,7 @@ impl Default for Status {
             pairing_pin: String::new(),
             elapsed: 0,
             log: vec![
-                "[TreeNB] 引擎 v0.3.0：Apple ID 登录、签名、设备自配对与隧道安装已接入。".into(),
+                "[TreeNB] 引擎 v0.3.1：Apple ID 登录、签名、设备自配对与隧道安装已接入。".into(),
                 "[TreeNB] 本地网页已启动，等待选择 Apple 账户。".into(),
             ],
         }
