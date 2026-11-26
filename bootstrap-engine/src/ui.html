@@ -35,10 +35,10 @@
 </head>
 <body>
 <div class="sheet">
-  <div class="bar"><button class="btn" aria-label="close">×</button><b>TreeNB</b><button class="btn" aria-label="more">···</button></div>
+  <div class="bar"><button class="btn" aria-label="关闭">×</button><b>TreeNB</b><button class="btn" aria-label="更多">···</button></div>
   <div class="steps" id="steps"></div>
   <pre id="log"></pre>
-  <div class="foot"><label><input type="checkbox" id="details"> Show details</label><span>a project for TreeNB</span></div>
+  <div class="foot"><label><input type="checkbox" id="details"> 显示详情</label><span>为 TreeNB 打造</span></div>
 </div>
 <div class="mask hide" id="mask"><div class="dlg" id="dlg"></div></div>
 <script>
@@ -55,22 +55,22 @@ function render(s){
   }).join('');
   var mask=document.getElementById('mask'), dlg=document.getElementById('dlg');
   if(s.dialog==='account-picker'){
-    var html='<h3>Sign in with which Apple Account?</h3>';
+    var html='<h3>使用哪个 Apple 账户登录？</h3>';
     s.accounts.forEach(function(a){html+='<button class="choice" data-account="'+esc(a)+'">'+esc(a)+'</button>'});
-    html+='<button class="choice" data-account="__new__">Another Apple Account</button>';
-    html+='<button class="choice" data-action="forget">Forget an Apple Account</button>';
-    html+='<button class="choice" data-action="back">Back</button>';
+    html+='<button class="choice" data-account="__new__">使用其他 Apple 账户</button>';
+    html+='<button class="choice" data-action="forget">移除某个 Apple 账户</button>';
+    html+='<button class="choice" data-action="back">返回</button>';
     dlg.innerHTML=html; mask.classList.remove('hide');
     dlg.querySelectorAll('[data-account]').forEach(function(b){b.onclick=function(){
       var email=this.getAttribute('data-account');
-      if(email==='__new__'){email=prompt('Apple ID 邮箱')||''; if(!email)return;}
+      if(email==='__new__'){email=prompt('请输入 Apple ID 邮箱')||''; if(!email)return;}
       fetch(base+'/account',{method:'POST',body:email}).then(poll);
       mask.classList.add('hide');
     }});
     dlg.querySelector('[data-action="back"]').onclick=function(){mask.classList.add('hide')};
     dlg.querySelector('[data-action="forget"]').onclick=function(){alert('账号管理即将开放')};
   } else if(s.dialog==='error') {
-    dlg.innerHTML='<h3>Something went wrong</h3><button class="choice" data-action="back">Back</button>';
+    dlg.innerHTML='<h3>出了点问题</h3><button class="choice" data-action="back">返回</button>';
     dlg.querySelector('[data-action="back"]').onclick=function(){mask.classList.add('hide')};
     mask.classList.remove('hide');
   } else { mask.classList.add('hide'); }
