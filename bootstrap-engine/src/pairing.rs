@@ -10,8 +10,10 @@
 //! 并把系统设置的入站连接转发到本进程在 127.0.0.1 上的监听端口。
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use idevice::remote_pairing::{
     PairableHost, PairableHostInfo, RemotePairingClient, RpPairingFile, RpPairingSocket,
@@ -21,8 +23,10 @@ use idevice::rsd::RsdHandshake;
 use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::keepalive::{self, KeepAlive};
+
 /// Settings 浏览的服务类型（不带结尾点，minis-bonjour 要求这个写法）。
-const PAIRABLE_HOST_TYPE: &str = "_remotepairing-pairable-host._tcp";
+pub const PAIRABLE_HOST_TYPE: &str = "_remotepairing-pairable-host._tcp";
 
 /// 配对结果：持久化的配对文件 + 主机 altIRK（重连识别用）。
 pub struct PairResult {
@@ -139,9 +143,11 @@ impl Drop for Advert {
 ///
 /// `on_pin` 在设备连入、PIN 生成时被调用一次，用于把 6 位码显示到网页。
 /// `on_event` 用于把进度写进日志（"广播中" / "设备已连接" / "配对成功"）。
+/// `workdir` 用于写静音文件与配对文件（容器内可写目录）。
 pub async fn pair_on_device<F, G>(
     name: &str,
     model: &str,
+    workdir: &Path,
     on_pin: F,
     on_event: G,
 ) -> Result<PairResult, String>
@@ -167,37 +173,83 @@ where
     let service_identifier = pairing_file.identifier.clone();
     on_event(format!("[配对] 本机监听 127.0.0.1:{port}，正在通过 Open Minis 广播可配对服务…"));
 
-    // 3) TXT 记录与 idevice FFI 完全一致，交给 App 侧发布。
+    // 3) 关键：切到「设置」后 iOS 会挂起 Open Minis，广播随即被系统撤回，
+    //    设置里那一行还没点就消失，点了锁屏密码后连接也建立不起来 → 永不弹码。
+    //    先启动静音播放保活（此时用户还在 Minis 里，播放器能正常打开），并通知用户。
+    let mut keepalive = match KeepAlive::start(workdir, keepalive::PAIRING_SECONDS) {
+        Ok(k) => {
+            on_event("[配对] 已开启静音保活：请保持弹出的播放器开启，切到设置时不要关闭它。".into());
+            Some(k)
+        }
+        Err(e) => {
+            on_event(format!(
+                "[配对] 无法开启静音保活：{e}。切到设置后 App 可能被挂起导致配对项消失，建议保持 Minis 前台或开启「增强后台」。"
+            ));
+            None
+        }
+    };
+    keepalive::notify(
+        "TreeNB 配对已就绪",
+        "到 设置 → 隐私与安全性 → 开发者模式，点 Pair with TreeNB。保持播放器开启。",
+    );
+
+    // 4) 清理上次运行残留的 pairable-host 广播（旧 authTag 已失效，点了只会一直转圈）。
+    keepalive::withdraw_leftovers();
+
+    // 5) TXT 记录与 idevice FFI 完全一致，交给 App 侧发布。
     let txt = host_info.mdns_txt_records(&service_identifier);
     let mut advert = Advert::publish(&service_identifier, port, &txt).await?;
-    on_event("[配对] 广播已就绪：请到 设置 → 隐私与安全性 → 开发者模式 → 与主机配对".into());
-    on_event("[配对] 请先输入锁屏密码；随后网页会显示 6 位配对码，把它输入到设置里。".into());
+    on_event("[配对] 广播已就绪：请到 设置 → 隐私与安全性 → 开发者模式 → Pair with TreeNB".into());
+    on_event("[配对] 先输锁屏密码；随后网页会显示 6 位配对码（也会弹通知），把它输入到设置里。".into());
 
-    // 4) 等设备连入并完成 SRP pair-setup。PIN 通过回调推给网页显示。
+    // 6) 等设备连入并完成 SRP pair-setup。等待期间定期唤醒保活播放器，
+    //    避免用户不小心关掉后 App 被挂起。PIN 生成时同时发通知，
+    //    这样用户在「设置」里就能看到码，不必切回网页。
     let accept = async {
-        let (stream, _peer) = listener
-            .accept()
-            .await
-            .map_err(|e| format!("等待设备连接失败: {e}"))?;
-        on_event("[配对] 设备已连接，正在生成配对码…".into());
-        let socket = RpPairingSocket::new_device(stream);
-        let mut host = PairableHost::new(socket, host_info);
-        host.accept(&mut pairing_file, |pin| async move {
-            on_pin(pin);
-        })
-        .await
-        .map_err(|e| format!("配对握手失败: {e:?}"))?;
-        Ok::<_, String>(())
+        let check_every = StdDuration::from_secs(20);
+        loop {
+            tokio::select! {
+                res = listener.accept() => {
+                    break res.map_err(|e| format!("等待设备连接失败: {e}"));
+                }
+                _ = tokio::time::sleep(check_every) => {
+                    if let Some(k) = keepalive.as_mut() {
+                        match k.revive() {
+                            Ok(true) => on_event("[配对] 播放器被关闭过，已自动重新打开；配对期间请保持它开启。".into()),
+                            Ok(false) => {}
+                            Err(e) => on_event(format!("[配对] 保活状态检查失败：{e}")),
+                        }
+                    }
+                }
+            }
+        }
     };
+    let (stream, _peer) = accept.await?;
+    on_event("[配对] 设备已连接，正在生成配对码…".into());
+    let socket = RpPairingSocket::new_device(stream);
+    let mut host = PairableHost::new(socket, host_info);
+    host.accept(&mut pairing_file, |pin| async move {
+        // 通知里把 6 位码用空格隔开，方便在看设置时直接读。
+        let spaced: String = pin
+            .chars()
+            .take(6)
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        keepalive::notify("TreeNB 配对码", &format!("{spaced} — 输入到设置里的配对框"));
+        on_pin(pin);
+    })
+    .await
+    .map_err(|e| format!("配对握手失败: {e:?}"))?;
 
-    let result = accept.await;
-
-    // 5) 撤回广播（无论成功失败），避免下次配对撞到旧条目。
+    // 7) 撤回广播、停止静音（无论成功失败），避免残留条目与后台播放。
     advert.stop();
-
-    result?;
+    if let Some(k) = keepalive.as_mut() {
+        k.stop();
+    }
 
     on_event("[配对] 配对成功，配对文件已生成并保存到本机。".into());
+    keepalive::notify("TreeNB 配对成功", "请回到 Open Minis，安装会自动继续。");
     Ok(PairResult {
         pairing_file,
         host_alt_irk,
