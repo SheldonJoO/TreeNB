@@ -15,7 +15,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use isideload::auth::apple_account::{TwoFactorCallbackParams, TwoFactorCallbackResponse};
+use isideload::anisette::remote_v3::RemoteV3AnisetteProvider;
+use isideload::auth::apple_account::{AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse};
 use isideload::auth::builder::AppleAccountBuilder;
 use isideload::dev::certificates::DevelopmentCertificate;
 use isideload::dev::developer_session::DeveloperSession;
@@ -57,6 +58,66 @@ fn cert_options(certs: &[DevelopmentCertificate]) -> Vec<CertOption> {
         .collect()
 }
 
+/// anisette 服务器候选列表（伪装成 Mac 的机器指纹服务）。
+/// 默认 ani.iloader.app 在国内常被限流，导致 -22406/-20970 误报"密码错误"。
+/// 国内可直连的排在前面；轮换时每个都用全新 storage 子目录以重置 anisette 状态
+/// （否则旧 Trust Key 会报 -45003）。
+/// 这些地址来自 SideStore 官方 anisette-servers 列表。
+const ANISETTE_SERVERS: &[&str] = &[
+    "https://ani.xu30.top",          // SteX，国内可直连（社区验证）
+    "https://ani.sidestore.io",      // SideStore 官方主服务器
+    "https://ani.idevicehacked.com",
+    "https://ani.jkcoxson.com",      // idevice 作者自持
+    "https://ani.iloader.app",       // isideload 默认（放最后兜底）
+];
+
+fn server_short(url: &str) -> String {
+    url.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .to_string()
+}
+
+/// 把冗长的 isideload 错误链压成一行可读摘要，方便日志里快速定位。
+fn short_auth_err(msg: &str) -> String {
+    if let Some(code) = msg.split("Auth error ").nth(1) {
+        let code = code.split(|c: char| c == ',' || c == ')' || c == '}').next().unwrap_or("");
+        return format!("认证错误 {code}");
+    }
+    if let Some(code) = msg.split("AuthWithMessage(").nth(1) {
+        let code = code.split(',').next().unwrap_or("");
+        return format!("认证错误 {code}");
+    }
+    // 取最后一行有意义的文字。
+    msg.lines()
+        .rev()
+        .find(|l| !l.trim().is_empty() && l.len() < 120)
+        .unwrap_or(msg)
+        .trim()
+        .to_string()
+}
+
+/// 用指定 anisette 服务器尝试登录。anisette_dir 用全新子目录 = 重置 anisette 状态。
+async fn try_login_with_server<C>(
+    email: &str,
+    password: &str,
+    two_factor: C,
+    server_url: &str,
+    anisette_dir: &PathBuf,
+) -> Result<AppleAccount, rootcause::Report>
+where
+    C: isideload::util::callbacks::TwoFactorCallback,
+{
+    let provider = RemoteV3AnisetteProvider::new(
+        server_url,
+        Box::new(FsStorage::new(anisette_dir.clone())),
+        "0".to_string(),
+    )?;
+    AppleAccountBuilder::new(email)
+        .anisette_provider(provider)
+        .login(password, two_factor)
+        .await
+}
+
 fn main() {
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -87,7 +148,7 @@ fn main() {
             rt.block_on(run_install(PathBuf::from(ipa)));
         }
         "version" | _ => {
-            println!("treenb-bootstrap 0.3.0 (aarch64-linux-musl)");
+            println!("treenb-bootstrap 0.3.1 (aarch64-linux-musl)");
             println!("usage: treenb-bootstrap <developer-mode|install>");
         }
     }
@@ -161,19 +222,54 @@ async fn run_install(ipa: PathBuf) {
         }
     };
 
-    let mut account = match AppleAccountBuilder::new(&email)
-        .login(&password, two_factor)
-        .await
-    {
-        Ok(a) => a,
-        Err(e) => {
-            let msg = format!("{e:?}");
-            ui.log(format!("[登录失败] {msg}"));
-            fail(&ui, "Apple ID", "Apple ID 登录失败，请展开详情查看原因。");
+    // 轮换 anisette 服务器：默认 ani.iloader.app 在国内常被限流，报 -22406/-20970
+    // 这类"密码错误"的假象。每个服务器用全新 storage 子目录重置 anisette 状态，
+    // 避免旧 Trust Key 导致 -45003。任何一台登录成功即停。
+    let mut account: Option<AppleAccount> = None;
+    let mut last_err = String::new();
+    let total = ANISETTE_SERVERS.len();
+    for (i, server) in ANISETTE_SERVERS.iter().enumerate() {
+        ui.set_step(
+            "Apple ID",
+            "active",
+            &format!("正在登录（服务器 {}/{}：{}）…", i + 1, total, server_short(server)),
+        );
+        ui.log(format!("[登录] 尝试 anisette 服务器 {}：{}", i + 1, server));
+        // 全新子目录 = 重置 anisette 状态；带上轮次保证每次都不同。
+        // IPA 就放在 $WORKDIR 下，取其父目录作为存储根。
+        let base_dir = ipa.parent().unwrap_or(std::path::Path::new("."));
+        let ani_dir = base_dir.join(format!("anisette-try{}", i));
+        let _ = tokio::fs::remove_dir_all(&ani_dir).await;
+        match try_login_with_server(&email, &password, two_factor.clone(), server, &ani_dir).await {
+            Ok(a) => {
+                ui.log(format!("[登录] 服务器 {} 登录成功。", server_short(server)));
+                account = Some(a);
+                break;
+            }
+            Err(e) => {
+                let msg = format!("{e:?}");
+                last_err = msg.clone();
+                ui.log(format!("[登录] 服务器 {} 失败：{}", server_short(server), short_auth_err(&msg)));
+            }
+        }
+    }
+    drop(password);
+
+    let mut account = match account {
+        Some(a) => a,
+        None => {
+            ui.log(format!("[登录失败] 所有 anisette 服务器均失败。最后错误：{last_err}"));
+            let hint = if last_err.contains("-20209") || last_err.contains("locked") {
+                "账号被临时锁定，请去 iforgot.apple.com 验证身份解锁后再试。"
+            } else if last_err.contains("-22406") || last_err.contains("-20970") || last_err.contains("Anisette") {
+                "所有内置服务器都不可用，通常是当前网络限制。建议换网络（WiFi↔蜂窝）后重试，或稍后再试。"
+            } else {
+                "请核对 Apple ID 邮箱和密码是否正确，并确认账号已开启双重认证。"
+            };
+            fail(&ui, "Apple ID", &format!("登录失败：{hint}"));
             return keep_alive().await;
         }
     };
-    drop(password);
 
     ui.set_step("Apple ID", "done", "登录成功，已获取开发者会话");
     ui.log("[Apple ID] 登录成功，正在获取开发者证书…");
