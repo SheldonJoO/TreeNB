@@ -7,16 +7,16 @@
 #   2) 从发布站点下载 TreeNB IPA 与引导引擎（同站托管）
 #   3) 启动引导引擎 → 在 Minis 浏览器弹出本地网页 → 五步交互
 #
-# ⚠️ 诚实标注（v1.2.1 外壳验证版，网页已中文化）：
-#   - 引擎已从 isideload/idevice 独立开源库编译成 aarch64 静态 ELF，
-#     本地网页能起、账号能选（这一步验证 ELF 可在 Open Minis 运行）。
-#   - 真实的 RPPairing 自配对 + anisette 登录 + 签名 + 安装逻辑仍在接入，
-#     本版选账号后不会真正把 App 装进系统，网页与脚本均如实说明。
+# ⚠️ 诚实标注（v1.3.0，Apple ID 登录与签名已接入）：
+#   - v1.3.0 在本地网页里接入 Apple ID 密码 / 二次验证输入，用 isideload
+#     完成真实登录、开发者证书注册与 IPA 签名。
+#   - RPPairing 自配对与安装隧道仍在接入：签名完成后若本机没有 pairing.plist，
+#     网页会明确提示尚未安装，不会假装成功。
 #   - 全程不依赖 SideInstaller，只借它的"本地网页交互"外形。
 
 set -eu
 
-TNB_BOOTSTRAP_VERSION="1.2.1"
+TNB_BOOTSTRAP_VERSION="1.3.0"
 
 # IPA 地址：优先用第 1 个参数（网页生成的命令会把同站 IPA 绝对地址传进来），
 # 其次用环境变量，最后回退到 GitHub Release 兼容地址。
