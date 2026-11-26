@@ -9,7 +9,7 @@ description = "On-device signing & install engine for TreeNB, running inside Ope
 isideload = { version = "0.5.2", default-features = false, features = ["install", "fs-storage", "tokio-mt"] }
 # idevice: MIT, by jkcoxson. TCP provider for Open Minis (no USB on iPhone).
 idevice = { version = "0.1.61", default-features = false, features = ["tcp", "ring", "afc", "installation_proxy", "rsd", "remote_pairing"] }
-tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
+tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "fs", "io-util", "net", "time"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
