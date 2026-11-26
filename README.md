@@ -116,6 +116,10 @@ xcodebuild archive -project TreeNB.xcodeproj -scheme TreeNB-App \
 
 签名步骤**只在 release / 手动勾选时运行**，PR 触碰不到 secrets。
 
+## 致谢
+
+- **[SideInstaller by FrizzleM](https://github.com/FrizzleM/SideInstaller)** —— 特别致谢。TreeNB 的免电脑安装引导思路借鉴自该项目（浏览器 + 终端命令 + 唤起系统签名能力的整体流程）。TreeNB 未引入其任何代码，仅受其思路启发，特此单独鸣谢与致敬。
+
 ## 许可证
 
 AGPL-3.0（与 openSSS / TreeNewBee 一致）。
