@@ -130,7 +130,9 @@ async fn serve(
         }
     }
 
-    let head = String::from_utf8_lossy(&raw[..header_end - 4]);
+    // into_owned: detach from `raw` so we can keep reading the header while
+    // growing the buffer below (otherwise E0502 borrow conflict).
+    let head = String::from_utf8_lossy(&raw[..header_end - 4]).into_owned();
     let first = head.lines().next().unwrap_or("");
     let parts: Vec<&str> = first.split_whitespace().collect();
     let method = parts.first().copied().unwrap_or("GET");
@@ -184,7 +186,8 @@ async fn serve(
                             step.state = "active".into();
                             step.detail = "正在签名…".into();
                         }
-                        s.log.push(format!("account: {}", s.accounts[0]));
+                        let chosen = s.accounts.first().cloned().unwrap_or_default();
+                        s.log.push(format!("account: {}", chosen));
                     }
                 }
                 ("HTTP/1.1 200 OK", "application/json", "{\"ok\":true}".into())
