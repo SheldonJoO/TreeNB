@@ -316,6 +316,44 @@ async fn finish_tunnel(
     Ok((adapter, handshake))
 }
 
+/// 通过配对隧道读取本机设备的 UDID 与名称，用于把设备注册进 Apple 开发者账号。
+/// 描述文件只有包含了本机 UDID 才能通过安装校验（否则报 0xe8008015）。
+pub async fn read_device_info(
+    pf: &mut RpPairingFile,
+    addr: SocketAddr,
+    hostname: &str,
+) -> Result<(String, String), String> {
+    use idevice::RsdService;
+
+    let stream = TcpStream::connect(addr)
+        .await
+        .map_err(|e| format!("连接设备配对服务 {addr} 失败: {e}"))?;
+    let conn = RpPairingSocket::new(stream);
+    let mut rpc = RemotePairingClient::new(conn, hostname);
+    rpc.connect(pf, || async { String::new() })
+        .await
+        .map_err(|e| format!("设备配对验证失败: {e:?}"))?;
+    let (mut adapter, mut handshake) = finish_tunnel(&mut rpc, addr).await?;
+
+    // 经 RSD 连到可信 lockdown 服务读设备标识。
+    let mut lockdown = idevice::lockdown::LockdownClient::connect_rsd(&mut adapter, &mut handshake)
+        .await
+        .map_err(|e| format!("连接 lockdown 失败: {e:?}"))?;
+    let name = lockdown
+        .get_value(Some("DeviceName"), None)
+        .await
+        .ok()
+        .and_then(|v| v.as_string().map(str::to_string))
+        .unwrap_or_else(|| "TreeNB iPhone".to_string());
+    let udid = lockdown
+        .get_value(Some("UniqueDeviceID"), None)
+        .await
+        .ok()
+        .and_then(|v| v.as_string().map(str::to_string))
+        .ok_or_else(|| "无法从设备读取 UDID".to_string())?;
+    Ok((name, udid))
+}
+
 /// 用 RPPairing 配对文件把已签名 IPA 安装到本机。
 ///
 /// `addr` 为 RPPairing 控制服务地址（默认 10.7.0.1:49152）。
