@@ -1327,6 +1327,271 @@ else
   exit 2
 fi
 
+# B1n. FFI 野指针防御 —— 修 LocalDevVPN 开启后「能操作几下才闪退」
+# ---------------------------------------------------------------------------
+# 真机 .ips（2026-11-27 09:05:36，slice_uuid F92EDE3F… 与 0836 包一致）：
+#   EXC_BAD_ACCESS / SIGSEGV，KERN_INVALID_ADDRESS at 0xfffffffffffffff0 (-16)，
+#   栈顶 libsystem_platform _platform_strlen + 4，
+#   崩溃队列 com.apple.root.default-qos（= FFIDispatcher 的 DispatchQueue.global().async）。
+# 反汇编 0836 主二进制（UUID 精确匹配）定位：
+#   0x100e647cc 是 strlen 包装（mov x19,x0 → bl strlen → add x1,x0,#1），
+#   frame2 0x100ed2818 第一条指令就 bl 到它；frame4 起落在 DeviceGatewayAPI Swift 段。
+#   → FFI 返回的 C 字符串指针是野指针 -16；Swift `if let` 只能拦 nil，
+#     拦不住 -16，String(cString:) 直接 strlen → 崩；随后的 free(ptr) 同样会崩。
+# 为什么 B1j 不够（本次真机反馈「不是马上闪退，能操作几下」）：
+#   B1j 只 no-op 了 AppBootManager:79 启动期那次 fetchUDID(forceLive:true)。
+#   但 MinimuxerImpl.isReady():195 内部自己还会 fetchUDID()，所有运行期操作
+#   （我的应用 onAppear / 健康检查 / 连接配置保存 / 后台刷新）经
+#   ensureMinimuxerReady → isReady 都会走到；VPN 开着时 utun + 10.7.0.1 前置
+#   检查全过才到 :195，VPN 关着则提前 .noVPN 返回 —— 这就是「开 VPN 操作几下
+#   才崩、关 VPN 不崩」的原因。
+# 修法（治本 / 不动流程 / 不动 UI）：在 IdeviceGateway + LibimobiledeviceGateway
+#   注入 tnbSafeCString / tnbSafeUTF8 / tnbFree，对所有 FFI 返回指针先做用户态
+#   地址合法性校验（拦 NULL 与 0xFFFFFFFF… 高位垃圾地址），合法指针原样走
+#   String(cString:) 与 free()。功能完全保留。
+#   ★ 玻璃 v3 与 0419 全屏启动链一行不动。
+IDVG="$SSS/Dependencies/minimuxer/DeviceGateway/idevice/IdeviceGateway.swift"
+LIBG="$SSS/Dependencies/minimuxer/DeviceGateway/libimobiledevice/LibimobiledeviceGateway.swift"
+for GW in "$IDVG" "$LIBG"; do
+  [ -f "$GW" ] || { echo "FATAL[B1n]: 缺少 $GW" >&2; exit 2; }
+done
+python3 - "$IDVG" "$LIBG" <<'PYB1N'
+import sys, re
+
+helper = r'''
+
+// ===== TreeNB[B1n] FFI 野指针防御（修 LocalDevVPN 延迟闪退）=====
+// 真机 .ips: strlen 收到 0xfffffffffffffff0 (-16) → SIGSEGV。
+// Rust FFI 跨线程返回的 C 字符串指针可能是野指针；Swift `if let` 只能拦 nil，
+// 拦不住 -16。这里统一做用户态地址校验后再交给 String(cString:) / free()。
+@inline(__always)
+private func tnbPtrOK<T>(_ p: UnsafePointer<T>?) -> Bool {
+    guard let p = p else { return false }
+    let a = UInt(bitPattern: p)
+    guard a > 0x1000 && a < 0x0000_8000_0000_0000 else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_V1 rejected invalid C string pointer \(a)")
+        return false
+    }
+    return true
+}
+@inline(__always)
+private func tnbPtrOK<T>(_ p: UnsafeMutablePointer<T>?) -> Bool {
+    guard let p = p else { return false }
+    let a = UInt(bitPattern: p)
+    guard a > 0x1000 && a < 0x0000_8000_0000_0000 else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_V1 rejected invalid C string pointer \(a)")
+        return false
+    }
+    return true
+}
+@inline(__always)
+private func tnbSafeCString(_ p: UnsafePointer<CChar>?) -> String {
+    guard tnbPtrOK(p) else { return "" }
+    return String(cString: p!)
+}
+@inline(__always)
+private func tnbSafeCString(_ p: UnsafeMutablePointer<CChar>?) -> String {
+    guard tnbPtrOK(p) else { return "" }
+    return String(cString: p!)
+}
+@inline(__always)
+private func tnbSafeCString(_ buf: [CChar]) -> String {
+    return buf.withUnsafeBufferPointer { tnbSafeCString($0.baseAddress) }
+}
+@inline(__always)
+private func tnbSafeUTF8(_ p: UnsafePointer<CChar>?) -> String? {
+    guard tnbPtrOK(p) else { return nil }
+    return String(validatingUTF8: p!)
+}
+@inline(__always)
+private func tnbSafeUTF8(_ p: UnsafeMutablePointer<CChar>?) -> String? {
+    guard tnbPtrOK(p) else { return nil }
+    return String(validatingUTF8: p!)
+}
+@inline(__always)
+private func tnbSafeUTF8(_ buf: [CChar]) -> String? {
+    return buf.withUnsafeBufferPointer { tnbSafeUTF8($0.baseAddress) }
+}
+@inline(__always)
+private func tnbFree<T>(_ p: UnsafeMutablePointer<T>?) {
+    guard let q = p, tnbPtrOK(p) else { return }
+    free(UnsafeMutableRawPointer(q))
+}
+// ===== /TreeNB[B1n] =====
+'''
+
+def convert(src, prefix, replacement):
+    out, i = [], 0
+    while True:
+        j = src.find(prefix, i)
+        if j < 0:
+            out.append(src[i:]); break
+        out.append(src[i:j])
+        k, depth = j + len(prefix), 1
+        while k < len(src) and depth:
+            if src[k] == '(': depth += 1
+            elif src[k] == ')': depth -= 1
+            k += 1
+        expr = src[j + len(prefix):k - 1]
+        out.append(replacement + '(' + expr + ')')
+        i = k
+    return ''.join(out)
+
+for path in sys.argv[1:]:
+    s = open(path, encoding='utf-8').read()
+    if 'TreeNB[B1n]' in s:
+        print('  B1n already present:', path.split('/')[-1]); continue
+    n_cstr = s.count('String(cString: ')
+    n_utf8 = s.count('String(validatingUTF8: ')
+    n_free = len(re.findall(r'(?<![A-Za-z0-9_])free\(', s))
+    s = convert(s, 'String(cString: ', 'tnbSafeCString')
+    s = convert(s, 'String(validatingUTF8: ', 'tnbSafeUTF8')
+    s = re.sub(r'(?<![A-Za-z0-9_])free\(', 'tnbFree(', s)
+    s = s.rstrip() + '\n' + helper
+    open(path, 'w', encoding='utf-8').write(s)
+    print('  B1n patched %s: cString=%d validatingUTF8=%d free=%d'
+          % (path.split('/')[-1], n_cstr, n_utf8, n_free))
+PYB1N
+for GW in "$IDVG" "$LIBG"; do
+  grep -q 'tnbSafeCString' "$GW" || { echo "FATAL[B1n]: $GW 未注入安全转换" >&2; exit 2; }
+  grep -q 'tnbPtrOK' "$GW"      || { echo "FATAL[B1n]: $GW 未注入指针校验" >&2; exit 2; }
+  grep -q 'tnbFree' "$GW"       || { echo "FATAL[B1n]: $GW 未注入安全释放" >&2; exit 2; }
+done
+# helper 自身每个文件含 2 处 String(cString: p!)（那是校验通过后的最终安全转换），
+# 两个文件合计允许 4 处；超过即说明有业务调用没被替换。
+CSTR_LEFT=$(grep -cE 'String\(cString: ' "$IDVG" "$LIBG" | awk -F: '{s+=$2} END{print s+0}')
+[ "$CSTR_LEFT" -le 4 ] || { echo "FATAL[B1n]: 仍有 $CSTR_LEFT 处未保护的 String(cString:)" >&2; exit 2; }
+ok "B1n: FFI 野指针防御已注入（String(cString:)/validatingUTF8/free 全量保护）"
+
+# B1o. 品牌全量统一 —— openSSS → 🌲TreeNB（2026-11-27 真机截图反馈）
+# ---------------------------------------------------------------------------
+# 残留根因（此前只做白名单精确替换，漏改一大片）：
+#   ① .strings 是 UTF-8 文本 old-style plist（Xcode 打包时才转 binary plist），
+#      B1g2 只替换 8 条精确长句，剩下 106 条 value 里的 openSSS 全部原样；
+#   ② DonationViewController.swift:21 的页面标题用的还是
+#      NSLocalizedString("Support openSSS") —— B1g 只改了 ProfileViewController
+#      的「入口」title，没改「赞助页」自身 title（截图「支持 openSSS」来源）；
+#   ③ 系统设置 → 开发者模式里的 "Pair with openSSS" 是 iOS 按 Bonjour TXT
+#      "name" 生成的，来自 MinimuxerConstants.defaultHostName（注释明确写了
+#      「renaming only affects new pairings」，改名不影响配对文件身份）。
+# 原则：只改用户可见的「产品自称」；致谢/版权/链接/数据库名/资源名一律保留
+#   （openSSS Team、github.com/SheldonJoO/openSSS、SideStore、AltStore、
+#     AppConstants.Database.name、openSSS.conf 资源名均不动）。
+# 特别注意：只改 .strings 的 **value**，key 保持不变 —— 改 key 会让
+#   NSLocalizedString 找不到词条而直接把英文 key 显示出来（历史踩坑）。
+python3 - "$SSS" <<'PYB1O'
+import sys, re, glob, os
+root = sys.argv[1]
+
+PROTECT = {
+    'openSSS.conf': '\x01',
+    'openSSS Team': '\x02',
+    'github.com/SheldonJoO/openSSS': '\x03',
+    'SideStore': '\x04',
+    'AltStore': '\x05',
+}
+KEY_OVERRIDE = {
+    'Support openSSS': '支持与动力',      # 用户明确指定
+    'About openSSS': '关于 🌲TreeNB',
+    'Open openSSS': '打开 🌲TreeNB',
+    'openSSS': '🌲TreeNB',                # 通知标题 / 二维码页小字
+}
+line_re = re.compile(r'^(\s*"((?:[^"\\]|\\.)*)"\s*=\s*")((?:[^"\\]|\\.)*)("\s*;.*)$', re.M)
+
+def brand(key, val):
+    v = val
+    for k, t in PROTECT.items():
+        v = v.replace(k, t)
+    v = v.replace('openSSS', '🌲TreeNB')
+    for k, t in PROTECT.items():
+        v = v.replace(t, k)
+    return KEY_OVERRIDE.get(key, v)
+
+changed_files, changed_vals = 0, 0
+for p in glob.glob(root + '/**/*.strings', recursive=True):
+    try:
+        s = open(p, encoding='utf-8').read()
+    except (UnicodeDecodeError, FileNotFoundError):
+        continue
+    hits = [m for m in line_re.finditer(s) if 'openSSS' in m.group(3) or m.group(2) in KEY_OVERRIDE]
+    if not hits:
+        continue
+    s2 = line_re.sub(lambda m: m.group(1) + brand(m.group(2), m.group(3)) + m.group(4), s)
+    if s2 != s:
+        open(p, 'w', encoding='utf-8').write(s2)
+        changed_files += 1
+        changed_vals += len(hits)
+print('  B1o strings: %d files, %d values rebranded' % (changed_files, changed_vals))
+
+# Swift 侧：页面标题 / 主题预览 / 启动屏兜底 / 配对广播名
+reps = [
+    (root + '/AltStore/Shell/DonationViewController.swift',
+     'title = NSLocalizedString("Support openSSS", comment: "")',
+     'title = "支持与动力"'),
+    (root + '/SideStore/Views/Settings/Advanced/UserCustomizations/ThemePickerView.swift',
+     'Text("openSSS")', 'Text("🌲TreeNB")'),
+    (root + '/SideStore/Views/SplashView.swift',
+     '?? "openSSS"', '?? "🌲TreeNB"'),
+    (root + '/Dependencies/minimuxer/Common/MinimuxerConstants.swift',
+     'public static let defaultHostName = "openSSS"',
+     'public static let defaultHostName = "TreeNB"'),
+    (root + '/SideStore/Core/Certificates/CodeSignValidator.swift',
+     'machineName.starts(with: "openSSS")',
+     '(machineName.starts(with: "openSSS") || machineName.starts(with: "TreeNB"))'),
+]
+for p, a, b in reps:
+    try:
+        s = open(p, encoding='utf-8').read()
+    except FileNotFoundError:
+        print('  WARN missing', p); continue
+    if b in s:
+        print('  B1o already:', os.path.basename(p)); continue
+    if a not in s:
+        print('  WARN anchor not found:', os.path.basename(p), repr(a)); continue
+    open(p, 'w', encoding='utf-8').write(s.replace(a, b, 1))
+    print('  B1o patched:', os.path.basename(p))
+PYB1O
+LSTR="$SSS/AltStore/zh-Hans.lproj/Localizable.strings"
+grep -q '"Support openSSS" = "支持与动力"' "$LSTR" \
+  || { echo "FATAL[B1o]: 支持入口文案未归一" >&2; exit 2; }
+if grep -q '"支持 openSSS"' "$LSTR"; then
+  echo "FATAL[B1o]: 仍残留 支持 openSSS" >&2; exit 2
+fi
+grep -q 'title = "支持与动力"' "$SSS/AltStore/Shell/DonationViewController.swift" \
+  || { echo "FATAL[B1o]: 赞助页标题未归一" >&2; exit 2; }
+grep -q 'defaultHostName = "TreeNB"' "$SSS/Dependencies/minimuxer/Common/MinimuxerConstants.swift" \
+  || { echo "FATAL[B1o]: 配对广播名未归一" >&2; exit 2; }
+ok "B1o: 品牌全量统一已校验（.strings value / 赞助页 / 配对广播名）"
+
+# B1p. 冻结用户已验收通过的 UI / 启动链基线（2026-11-27 用户要求「固定下」）
+# ---------------------------------------------------------------------------
+# 真机确认：全屏（无上下黑边）+ 0828 同款玻璃 v3 均正常。此后任何改动只要
+# 破坏其中任一项，patch 阶段立即 FATAL，不再流出坏包。
+# 历史上把界面搞坏的四种写法，逐条禁止重新出现：
+#   ① tnbForceFullScreen（SceneDelegate 遍历 window 强改 frame）
+#   ② B1k fullscreen（LaunchViewController.viewDidAppear 强改 view/window.frame）
+#   ③ if false && !hasCompletedOnboarding（跳过引导页 → 新装卡「正在启动」）
+#   ④ TNBFlickerGuard / TreeLaunchOverlay 闪屏遮罩（额外 window 层）
+GLASS="$ROOT/Sources/Container/GlassChrome.swift"
+LOGVC_FREEZE="$SSS/AltStore/LaunchViewController.swift"
+grep -q 'TNB_GLASS_APPEARANCE_V2 installed (v3 liquid glass)' "$GLASS" \
+  || { echo "FATAL[B1p]: 玻璃 v3 基线被改动" >&2; exit 2; }
+grep -q 'TreeNB\[B1j\]' "$BOOTMGR" \
+  || { echo "FATAL[B1p]: B1j VPN 防闪退丢失" >&2; exit 2; }
+if grep -q 'tnbForceFullScreen' "$SCENEDELEGATE"; then
+  echo "FATAL[B1p]: SceneDelegate frame 强制代码重新出现（会破坏全屏）" >&2; exit 2
+fi
+if grep -q 'TNBFlickerGuard.cover()' "$SCENEDELEGATE"; then
+  echo "FATAL[B1p]: 闪屏遮罩重新出现（会破坏全屏）" >&2; exit 2
+fi
+if grep -q 'B1k\] fullscreen' "$LOGVC_FREEZE"; then
+  echo "FATAL[B1p]: viewDidAppear frame 兜底重新出现（会破坏全屏）" >&2; exit 2
+fi
+if grep -q 'if false && !UserDefaults.standard.hasCompletedOnboarding' "$LOGVC_FREEZE"; then
+  echo "FATAL[B1p]: 跳过引导页重新出现（新装会卡「正在启动」）" >&2; exit 2
+fi
+ok "B1p: 全屏 + 玻璃 v3 + B1j + 0419 启动链已冻结校验"
+
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
 # 现象：点小组件里的容器 App，只进 openSSS 界面，不启动对应 guest。
