@@ -1,0 +1,121 @@
+# TreeNB —— Xcode 26 / iOS 26 SDK 构建（原生 Liquid Glass，隔离链路）
+#
+# 为什么是 Xcode 26 而不是 27：
+#   - 用户要的是 iOS 原生 Liquid Glass，该材质自 iOS 26 引入，用 iOS 26 SDK 编译即可生效。
+#   - Xcode 27 彻底移除 ld64/ld_classic（DTS 确认），其新链接器 ld_prime 拒绝
+#     ring 0.17.14 预编译汇编 object (address ... not in any section in libidevice_ffi.a)，
+#     且无任何开关可回退 → Swift 源码零错误但链接必失败。
+#   - Xcode 26 仍完整支持 -ld_classic，可绕开该链接问题；macos-26 runner 自带
+#     Xcode 26.6 / iOS 26.5 SDK / Rust 1.100 / arm64，全部就位。
+#
+# 差异点（相对 build.yml 稳定链路）：
+#   - runs-on: macos-26（arm64），用系统默认 Xcode 26.6
+#   - XCODEGEN + 无签名 Archive，不签名、不发布、不覆盖稳定 artifact
+#   - 链接固定 -ld_classic（Xcode 26 可用），绕开 ring 汇编 object
+#   - Rust 预装，省去 rustup 安装步骤
+# 触发：仅 workflow_dispatch（手动）。
+
+name: TreeNB Build (Xcode 26 / Liquid Glass)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: treenb-xcode26
+  cancel-in-progress: true
+
+env:
+  SCHEME: TreeNB-App
+  ARCHIVE_PATH: build/TreeNB.xcarchive
+  DERIVED_DATA: build/DerivedData
+
+jobs:
+  build:
+    name: Archive (Xcode 26 / iOS 26 SDK, unsigned)
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Record toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcode-select -p
+          xcrun --sdk iphoneos --show-sdk-path
+          rustc --version
+          cargo --version
+          rustup target list --installed | grep aarch64-apple-ios || rustup target add aarch64-apple-ios
+
+      - name: Cache SPM packages
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: spm-xcode26-${{ runner.os }}-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: spm-xcode26-${{ runner.os }}-
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Prepare dependencies & generate project
+        run: ./scripts/prepare_dependencies.sh
+
+      - name: Archive (no signing)
+        id: archive
+        run: |
+          set -o pipefail
+          mkdir -p build
+          # Xcode 26 的 -ld_classic 可用：绕开 ring 0.17.14 预编译汇编 object
+          # 被新链接器拒绝的问题（address ... not in any section in libidevice_ffi.a）。
+          xcodebuild archive \
+            -project TreeNB.xcodeproj \
+            -scheme "$SCHEME" \
+            -archivePath "$ARCHIVE_PATH" \
+            -sdk iphoneos -arch arm64 \
+            -configuration Release \
+            -derivedDataPath "$DERIVED_DATA" \
+            OTHER_LDFLAGS='$(inherited) -ld_classic' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build/xcodebuild-archive.log
+
+      - name: Report archive errors
+        if: failure() && steps.archive.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import re, os
+          p = 'build/xcodebuild-archive.log'
+          if not os.path.exists(p):
+            print('no archive log')
+            raise SystemExit(0)
+          errs = []
+          for line in open(p, errors='replace'):
+            if re.search(r'error:|fatal error:|: error:', line):
+              errs.append(line.rstrip())
+          print('=== compile errors (%d) ===' % len(errs))
+          for e in errs[:60]:
+            print(e)
+          PY
+
+      - name: Upload archive log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TreeNB-xcode26-log
+          path: build/xcodebuild-archive.log
+          if-no-files-found: ignore
+
+      - name: Assemble unsigned IPA
+        if: success()
+        run: ./scripts/assemble_ipa.sh
+
+      - name: Upload unsigned artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TreeNB-xcode26-unsigned
+          path: build/*.ipa
+          if-no-files-found: ignore
