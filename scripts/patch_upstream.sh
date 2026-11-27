@@ -1113,146 +1113,13 @@ fi
 #   历史补丁 tnbForceFullScreen 把 SceneDelegate 所有 window/root view 的 frame
 #   强行写成 scene.screen.bounds，正是把界面框进非全屏尺寸的可疑来源。
 #   整合版恢复 0419 行为：不再注入任何 window/root frame 强制代码。
-#   （保留 B1j 防闪退、B1k 跳过引导页、玻璃 v3。）
+#   （保留 B1j 防闪退、B1k 仅文案归一、玻璃 v3。）
 
-# B1g5. 闪屏治标：SceneDelegate.sceneWillEnterForeground 在最早时机盖【统一品牌启动画面】，
-#       等 reconcileInstalledApps 完成后淡出。遮罩不再是快照，内容与底层重建无关，
-#       靠最短展示 0.35s + 1.5s 兜底把中间态全藏住。治本见 B1g4。
-if [ -f "$SCENEDELEGATE" ]; then
-  python3 - "$SCENEDELEGATE" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-o = s
-
-# 1) 在 guard DatabaseManager.shared.isStarted 之前盖遮罩（冷启动也盖，且 guard return 时兜底会自动撤）。
-anchor = '''        guard DatabaseManager.shared.isStarted else { return }
-        
-        Task {
-            await AppManager.shared.reconcileInstalledApps()
-            await WidgetDataManager.publishCurrentInstalledAppsIfNeeded(in: DatabaseManager.shared.viewContext)
-        }
-    }'''
-replacement = '''        // TreeNB anti-flicker: 盖住重建/快照交接的中间态（统一品牌画面，1.5s 兜底自动撤）。
-        TNBFlickerGuard.cover()
-        guard DatabaseManager.shared.isStarted else { return }
-
-        Task {
-            await AppManager.shared.reconcileInstalledApps()
-            await WidgetDataManager.publishCurrentInstalledAppsIfNeeded(in: DatabaseManager.shared.viewContext)
-            // 重绘与数据刷新完成后再淡出遮罩。
-            TNBFlickerGuard.reveal()
-        }
-    }'''
-if anchor in s:
-    s = s.replace(anchor, replacement, 1)
-if s != o:
-    open(p, 'w', encoding='utf-8').write(s)
-    print('  SceneDelegate.swift: 已接入 TNBFlickerGuard（cover + reveal）')
-else:
-    print('  SceneDelegate.swift: 闪屏遮罩已存在（幂等）')
-PY
-  grep -q 'TNBFlickerGuard.cover()' "$SCENEDELEGATE" \
-    || { echo "FATAL[B1g5]: 闪屏遮罩接入失败" >&2; exit 2; }
-  ok "闪屏治标：切前台品牌遮罩已接入 SceneDelegate"
-fi
-
-# B1g6. 闪屏第一帧：用品牌化 LaunchScreen.storyboard 覆盖上游纯白启动屏。
-#       上游 LaunchScreen 背景写死白色（Appearance=light），深色模式冷启动闪白光；
-#       配合 config plist / project.yml 移除 UILaunchScreen:{}（它会覆盖 storyboard），
-#       冷启动第一帧即 TreeNB 品牌 + 跟随系统深浅，杜绝白闪。
-LAUNCHSB="$SSS/AltStore/iOS/LaunchScreen.storyboard"
-if [ -f "$ROOT/config/LaunchScreen.storyboard" ] && [ -f "$LAUNCHSB" ]; then
-  cp "$ROOT/config/LaunchScreen.storyboard" "$LAUNCHSB"
-  grep -q 'systemBackgroundColor' "$LAUNCHSB" \
-    || { echo "FATAL[B1g6]: 品牌 LaunchScreen 未铺好" >&2; exit 2; }
-  ok "闪屏第一帧：品牌化 LaunchScreen（深浅自适应）已覆盖"
-else
-  echo "FATAL[B1g6]: 缺少 config/LaunchScreen.storyboard 或上游 LaunchScreen" >&2
-  exit 2
-fi
-
-# B1g7. 闪屏冷启动收尾：sceneWillEnterForeground 冷启动时也会 cover，但那时
-#       DatabaseManager 未启动会 guard return，走到不到 Task 里的 reveal —— 靠 1.5s
-#       兜底撤。这里在 splash→主界面 crossDissolve 完成的 completion 里主动 reveal，
-#       让冷启动第一帧的跳变恰好发生在遮罩淡出之前。
-LAUNCHVC="$SSS/AltStore/LaunchViewController.swift"
-if [ -f "$LAUNCHVC" ]; then
-  python3 - "$LAUNCHVC" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-o = s
-# 在 transitionToMainInterface 的 completion 里（handoff 日志之后）补 reveal。
-anchor = '''            debugLog("[LaunchViewController] Transition complete - exiting LaunchViewController, handing off to the main interface")
-            for child in self.children where child !== destinationVC {'''
-replacement = '''            debugLog("[LaunchViewController] Transition complete - exiting LaunchViewController, handing off to the main interface")
-            // TreeNB anti-flicker: 冷启动首帧跳变已结束，收起品牌遮罩。
-            TNBFlickerGuard.reveal()
-            for child in self.children where child !== destinationVC {'''
-if anchor in s:
-    s = s.replace(anchor, replacement, 1)
-if s != o:
-    open(p, 'w', encoding='utf-8').write(s)
-    print('  LaunchViewController.swift: 冷启动收尾 reveal 已注入')
-else:
-    print('  LaunchViewController.swift: 冷启动收尾 reveal 已存在（幂等）')
-PY
-  grep -q 'TNBFlickerGuard.reveal()' "$LAUNCHVC" \
-    || { echo "FATAL[B1g7]: 冷启动收尾 reveal 接入失败" >&2; exit 2; }
-  ok "闪屏冷启动：splash 交接完成后主动 reveal 已接入"
-fi
-
-# B1g8. 每个树应用启动时也盖品牌遮罩。
-#       用户反馈：「正在切换」只在退出/切回宿主时有，从 App 列表点图标启动 guest 时没有。
-#       实际 launchAppWithBundleId() 里本就有 TreeLaunchOverlay.hide(after: 0.9)（guest
-#       启动完成后收起），但从未配套 cover —— 只有 widget 深链路径调了 showIfNeeded。
-#       这里在 runApp 之前补 show(name:)，与既有 hide 配对，且 show 内部幂等（window 非空
-#       则不重复创建），不会与 widget 路径冲突。
-APPLISTVIEW="$LC/LiveContainerSwiftUI/Views/AppList/LCAppListView.swift"
-if [ -f "$APPLISTVIEW" ]; then
-  python3 - "$APPLISTVIEW" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-o = s
-anchor = '''        do {
-            try await appFound.runApp(multitask: nil, containerFolderName: container, urlStr: urlStr, forceJIT: forceJIT)'''
-replacement = '''        // TreeNB anti-flicker: 点图标启动 guest 时也盖统一品牌启动画面，
-        // 遮住宿主 App 列表 → guest 启动页 → guest 界面的中间态。
-        // show 内部幂等，widget 深链已盖过则不会重复创建；下面 runApp 成功后有 hide 配对。
-        TreeLaunchOverlay.show(name: appFound.displayName)
-        do {
-            try await appFound.runApp(multitask: nil, containerFolderName: container, urlStr: urlStr, forceJIT: forceJIT)'''
-if anchor in s:
-    s = s.replace(anchor, replacement, 1)
-if s != o:
-    open(p, 'w', encoding='utf-8').write(s)
-    print('  LCAppListView.swift: 点图标启动 guest 已接入 TreeLaunchOverlay.show')
-else:
-    print('  LCAppListView.swift: 启动遮罩已存在（幂等）')
-PY
-  grep -q 'TreeLaunchOverlay.show(name: appFound.displayName)' "$APPLISTVIEW" \
-    || { echo "FATAL[B1g8]: 启动遮罩接入失败" >&2; exit 2; }
-  ok "闪屏启动：每个 guest 启动已接入品牌遮罩"
-else
-  echo "FATAL[B1g8]: 缺少 LCAppListView.swift" >&2
-  exit 2
-fi
-
-# B1g9. 用 git 追踪的 Sources/UI/TreeLaunchOverlay.swift 覆盖 upstream 同名文件。
-#       原因：upstream/ 被 gitignore，CI 每次从远程 clone，本地改 upstream 无效。
-#       B1g8 与 widget 深链都依赖这个文件，且它的遮罩 window 需显式 frame（修穿模）。
-TREE_OVERLAY="$LC/LiveContainerSwiftUI/Utilities/TreeLaunchOverlay.swift"
-if [ -f "$ROOT/Sources/UI/TreeLaunchOverlay.swift" ]; then
-  cp "$ROOT/Sources/UI/TreeLaunchOverlay.swift" "$TREE_OVERLAY"
-  grep -q 'scene.coordinateSpace.bounds' "$TREE_OVERLAY" \
-    || { echo "FATAL[B1g9]: TreeLaunchOverlay 全屏 frame 未挂载" >&2; exit 2; }
-  ok "启动遮罩源码挂载 + 全屏 frame（修穿模）已生效"
-else
-  echo "FATAL[B1g9]: 缺少 Sources/UI/TreeLaunchOverlay.swift" >&2
-  exit 2
-fi
+# B1g5~B1g9（已移除，2026-11-27 12:25）。
+#   真机对照：只有 0419（这些遮罩/启动屏补丁尚未引入）是全屏且能正常进主界面。
+#   0419 之后新增的 TNBFlickerGuard.cover() 额外 window、品牌 LaunchScreen、
+#   TreeLaunchOverlay 启动遮罩，都会往场景里插入非全屏 window/快照层。
+#   本整合版回退到 0419 的窗口/启动屏行为，只保留玻璃 v3 与 B1j 防闪退。
 
 # B1g4. 闪屏治本：ShellTheme.applyAppearance(to:) 原本每次都无条件写
 #       window.overrideUserInterfaceStyle，即使值没变也会触发整棵视图树的 trait 刷新/重绘，
@@ -1705,42 +1572,19 @@ else
 fi
 
 
-# B1k. 覆盖更新后进不去 + Welcome openSSS（2026-11-27 真机 0158 反馈）。
+# B1k（仅保留文案归一）。2026-11-27 12:25 修正。
 # ---------------------------------------------------------------------------
-# 真机证据：用旧 TreeNB 直接覆盖更新后，进来是 OnboardingView 引导页（Welcome to openSSS），
-#   底部 Get Started 按钮被裁出屏幕 → 点不动。
-# 根因：①覆盖安装后 hasCompletedOnboarding 丢失 → 弹引导页；
-#   ②OnboardingView.swift 的 NSLocalizedString key 从未被品牌补丁覆盖（只改了 .strings value）。
-# 修法：①启动跳过引导页（默认已完成），直接进主界面 —— 用户立即可用；
-#   ②OnboardingView.swift 全部 openSSS key → 🌲TreeNB（设置里重播引导也正确）。
-# 注意：原 B1k 的 ③「root view / window.frame 全屏兜底」已移除。
-#   真机对照证明 0419（无任何 frame 强制）才全屏，0828 起加了 frame 强制反而上下黑边。
-#   本整合版恢复 0419 窗口行为，不注入任何 window/root frame 代码。
+# 真机反馈：覆盖更新后进 OnboardingView 看到 Welcome to openSSS。
+# 根因：OnboardingView.swift 的 NSLocalizedString key 从未被品牌补丁覆盖（只改了 .strings value）。
+# 修法：OnboardingView.swift 全部 openSSS key → 🌲TreeNB。
+#
+# 【已撤销】原 B1k ①「跳过引导页」：把 `if !hasCompletedOnboarding` 改成 `if false && ...`
+#   会导致新装包 finishLaunching() 命中 `if !hasCompletedOnboarding { ... return }` 早退，
+#   永远不调用 transitionToMainInterface() → 卡在 SplashView「正在启动…」。
+#   0419 的引导页在全屏窗口下按钮可点，回退到 0419 行为即可，不再跳过。
+# 【已撤销】原 B1k ③「frame 全屏兜底」：恢复 0419 窗口行为。
 LOGVC="$SSS/AltStore/LaunchViewController.swift"
 ONBOARD="$SSS/SideStore/Views/Onboarding/OnboardingView.swift"
-
-# ① 跳过引导页：把 `if !hasCompletedOnboarding` 改为恒假，覆盖安装后直接进主界面。
-if [ -f "$LOGVC" ]; then
-  python3 - "$LOGVC" <<'PY2'
-import sys
-p=sys.argv[1]; s=open(p,encoding='utf-8').read()
-old='        if !UserDefaults.standard.hasCompletedOnboarding {'
-new=("        // TreeNB[B1k]: 覆盖更新后 hasCompletedOnboarding 会丢失，且引导页在低高度窗口下\n"
-     "        // 底部 Get Started 被裁切而无法点击 → 直接跳过引导，进主界面。\n"
-     "        if false && !UserDefaults.standard.hasCompletedOnboarding {")
-if old in s and 'TreeNB[B1k]' not in s:
-    s=s.replace(old,new,1)
-elif old not in s and 'TreeNB[B1k]' not in s:
-    sys.stderr.write('FATAL[B1k]: LaunchViewController 引导页判断锚点未找到\n'); sys.exit(9)
-open(p,'w',encoding='utf-8').write(s)
-print('  LaunchViewController.swift: 引导页已跳过（B1k）')
-PY2
-  grep -q 'TreeNB\[B1k\]' "$LOGVC" || { echo "FATAL[B1k]: 跳过引导页未注入" >&2; exit 10; }
-
-  ok "B1k: 跳过引导页已注入 LaunchViewController（窗口恢复 0419 全屏基线，不注入 frame 强制）"
-else
-  echo "FATAL[B1k]: 缺少 $LOGVC" >&2; exit 11
-fi
 
 # ② OnboardingView.swift 文案归一（key 本身必须改，改 .strings value 无效）。
 if [ -f "$ONBOARD" ]; then

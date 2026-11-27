@@ -142,7 +142,7 @@ targets:
       path: config/TreeNB-Info.plist
       properties:
         CFBundleShortVersionString: "1.0.261127" # TNB_VERSION_STAMP
-        CFBundleVersion: "202611270151" # TNB_VERSION_STAMP
+        CFBundleVersion: "202611271039" # TNB_VERSION_STAMP
         CFBundleDisplayName: 树应用
         CFBundleIdentifier: com.openssai.app
         CFBundleURLTypes:
@@ -180,9 +180,7 @@ targets:
           - remote-notification
           - voip
         ITSAppUsesNonExemptEncryption: false
-        # 闪屏修复：移除 UILaunchScreen:{}（iOS14+ 空启动屏会覆盖 storyboard），
-        # 改用品牌化 LaunchScreen.storyboard，深色模式跟随系统、冷启动第一帧不闪白。
-        # 有效的 UILaunchStoryboardName 在下方 scene manifest 内声明。
+        UILaunchScreen: {}
         # 文档类型（IPA 导入必需）：原版 openSSS Info.plist 声明了
         # com.apple.itunes.ipa，但 xcodegen 的 info.properties 覆盖后只剩 All Files，
         # UIDocumentPicker 按 IPA UTI 过滤时找不到声明 → 选不了 .ipa 文件。
