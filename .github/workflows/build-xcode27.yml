@@ -7,8 +7,9 @@
 #   - 只做无签名 Archive，不签名、不发布、不覆盖现有 artifact
 #   - Rust 段无需改：build_idevice.sh 用 xcrun --sdk iphoneos 自动指向 iOS 27 SDK，
 #     且编的是 aarch64-apple-ios target，在 arm64 host 上是原生路径
-#   - 加 -ld_classic：Xcode 27 新链接器(ld_prime)不认 ring 加密库预编译汇编 object
-#     (address ... not in any section in libidevice_ffi.a)，强制经典链接器绕开。
+#   - 链接器兼容：Xcode 27 新链接器(ld_prime)拒绝 ring 0.17.14 预编译汇编 object
+#     (address ... not in any section in libidevice_ffi.a)。-ld_classic 已在 27.1 移除，
+#     故逐个尝试 -ld64 / -Wl,-ld64 / 默认 / -ld_classic，命中哪个用哪个。
 #     Swift 源码本身在 iOS 27 SDK 下零错误，仅此链接兼容问题。
 # 触发：仅 workflow_dispatch（手动），避免 push 触发浪费资源。
 
@@ -74,15 +75,37 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build
-          xcodebuild archive \
-            -project TreeNB.xcodeproj \
-            -scheme "$SCHEME" \
-            -archivePath "$ARCHIVE_PATH" \
-            -sdk iphoneos -arch arm64 \
-            -configuration Release \
-            -derivedDataPath "$DERIVED_DATA" \
-            OTHER_LDFLAGS='$(inherited) -ld_classic' \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build/xcodebuild-archive.log
+          # ring 0.17.14 预编译汇编 object 被 Xcode 27 新链接器(ld_prime)拒绝。
+          # 编译产物已缓存，逐个换链接开关只需重链（秒级），命中即停。
+          FLAGS=( "-ld64" "-Wl,-ld64" "-ld_new" "-ld_classic" "" )
+          LINK_OK=0
+          for FLAG in "${FLAGS[@]}"; do
+            echo "=== try linker flag: '${FLAG}' ==="
+            if [ -z "$FLAG" ]; then
+              LD_ARGS=()
+            else
+              LD_ARGS=("OTHER_LDFLAGS=\$(inherited) ${FLAG}")
+            fi
+            rm -rf "$ARCHIVE_PATH"
+            if xcodebuild archive \
+              -project TreeNB.xcodeproj \
+              -scheme "$SCHEME" \
+              -archivePath "$ARCHIVE_PATH" \
+              -sdk iphoneos -arch arm64 \
+              -configuration Release \
+              -derivedDataPath "$DERIVED_DATA" \
+              "${LD_ARGS[@]}" \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build/xcodebuild-archive.log; then
+              echo "=== LINK OK with flag '${FLAG}' ==="
+              echo "${FLAG}" > build/linker-flag-used.txt
+              LINK_OK=1
+              break
+            fi
+          done
+          if [ "$LINK_OK" -ne 1 ]; then
+            echo "=== ALL linker flags failed ==="
+            exit 1
+          fi
 
       - name: Report archive errors
         if: failure() && steps.archive.outcome == 'failure'
