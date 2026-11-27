@@ -1107,6 +1107,62 @@ PY
   fi
 fi
 
+# B1g5a. 主 window 强制全屏（修「界面被缩进圆角卡片、四周黑边」）。
+#   真机反馈：主界面一直缩在屏幕中段、上下留黑，与 Xcode 版本无关。
+#   主 window 由 Main.storyboard 自动创建（AppDelegate/SceneDelegate 都不手动建），
+#   LiveContainer 的 guest window hook（makeKeyAndVisible / updateWindowScene）在宿主
+#   进程内可能改写了 windowScene，导致 storyboard 创建的 window 拿到非全屏尺寸。
+#   治本：在 willConnectTo 拿到 keyWindow 后，用 screen.coordinateSpace 强制铺满，
+#   并在首次 layout 再兜底一次（早期 screen.bounds 可能未稳定）。
+if [ -f "$SCENEDELEGATE" ]; then
+  python3 - "$SCENEDELEGATE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+
+helper = '''
+    // TreeNB: 主 window 强制全屏 —— 修 guest hook 改写 windowScene 导致主界面缩成圆角卡片、四周黑边。
+    private func tnbForceFullScreen(_ window: UIWindow?, scene: UIWindowScene) {
+        guard let window else { return }
+        let apply = {
+            // UIWindow.frame 使用 screen 坐标系；screen.bounds 即全屏（含状态栏区域）。
+            let full = scene.screen.bounds
+            if window.frame != full {
+                window.frame = full
+            }
+        }
+        apply()
+        // 首帧 layout 时 screen 尺寸才完全稳定，再兜底一次。
+        DispatchQueue.main.async(execute: apply)
+    }
+'''
+
+# 插入 helper 到 SceneDelegate class 内（guard let windowScene 之前的方法区）。
+anchor_connect = '''        guard let windowScene = (scene as? UIWindowScene) else { return }
+'''
+inject = '''        guard let windowScene = (scene as? UIWindowScene) else { return }
+
+        // TreeNB: 强制主 window 全屏，防 guest window hook 把它缩成小尺寸（黑边）。
+        tnbForceFullScreen(window ?? windowScene.windows.first, scene: windowScene)
+'''
+if anchor_connect in s and 'tnbForceFullScreen' not in s:
+    s = s.replace(anchor_connect, inject, 1)
+    # 在 class 声明后插入 helper 方法
+    cls = 'final class SceneDelegate: UIResponder, UIWindowSceneDelegate\n{\n'
+    if cls in s:
+        s = s.replace(cls, cls + helper, 1)
+    else:
+        cls2 = 'class SceneDelegate: NSObject, UIWindowSceneDelegate {\n'
+        s = s.replace(cls2, cls2 + helper, 1)
+
+open(p, 'w', encoding='utf-8').write(s)
+print('  SceneDelegate.swift: 主 window 强制全屏 helper 已注入')
+PY
+  grep -q 'tnbForceFullScreen' "$SCENEDELEGATE" \
+    || { echo "FATAL[B1g5a]: 主 window 全屏修复注入失败" >&2; exit 2; }
+  ok "主界面黑边修复：SceneDelegate 强制主 window 全屏已注入"
+fi
+
 # B1g5. 闪屏治标：SceneDelegate.sceneWillEnterForeground 在最早时机盖【统一品牌启动画面】，
 #       等 reconcileInstalledApps 完成后淡出。遮罩不再是快照，内容与底层重建无关，
 #       靠最短展示 0.35s + 1.5s 兜底把中间态全藏住。治本见 B1g4。
