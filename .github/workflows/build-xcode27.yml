@@ -7,6 +7,9 @@
 #   - 只做无签名 Archive，不签名、不发布、不覆盖现有 artifact
 #   - Rust 段无需改：build_idevice.sh 用 xcrun --sdk iphoneos 自动指向 iOS 27 SDK，
 #     且编的是 aarch64-apple-ios target，在 arm64 host 上是原生路径
+#   - 加 -ld_classic：Xcode 27 新链接器(ld_prime)不认 ring 加密库预编译汇编 object
+#     (address ... not in any section in libidevice_ffi.a)，强制经典链接器绕开。
+#     Swift 源码本身在 iOS 27 SDK 下零错误，仅此链接兼容问题。
 # 触发：仅 workflow_dispatch（手动），避免 push 触发浪费资源。
 
 name: TreeNB Build (Xcode 27)
@@ -78,6 +81,7 @@ jobs:
             -sdk iphoneos -arch arm64 \
             -configuration Release \
             -derivedDataPath "$DERIVED_DATA" \
+            OTHER_LDFLAGS='$(inherited) -ld_classic' \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build/xcodebuild-archive.log
 
       - name: Report archive errors
