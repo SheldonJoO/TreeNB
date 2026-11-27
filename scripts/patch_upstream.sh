@@ -1709,6 +1709,101 @@ for F in "$MINIMUX_IMPL" "$MINIMUX_WRAP"; do
 done
 ok "B1q: live UDID 查询在 VPN 路由下已改为缓存/占位，杜绝 lockdownd FFI 野指针"
 
+# B1s. 定位页 DeveloperModeStatus 查询 VPN 下跳过（修 1620 包点定位必闪）
+# ---------------------------------------------------------------------------
+# 真机 .ips（2026-11-27 18:34:34，build 202611271620，UUID 88219666-2392-3715-
+# 97b0-60b9c3268757）用 UUID 完全匹配的 dSYM 精确符号化：
+#   _platform_strlen → core::ffi::CStr::from_ptr → plist_new_string →
+#   lockdownd_get_value → IdeviceGateway.syncIsDeveloperModeEnabled() →
+#   IdeviceGateway.isDeveloperModeEnabled() → withFFIDispatch。
+# 上次 B1q 用的是 UUID 不匹配的诊断 dSYM（5AA54F4D vs 崩溃日志 a4e2b4ff），
+# 误判成 fetchUDID，只堵了 UDID 那条 lockdownd 查询，这条 DeveloperModeStatus
+# 没堵，于是 1620 包点定位仍闪。
+# 0419 完美基线是纯 Container 壳 + location_simulation_stubs.c，定位页根本
+# 不进 IdeviceGateway 的 lockdownd FFI，所以不闪。
+# 修法（不动定位会话本身）：VPN(utun/10.7.0.1) 已连时，isDeveloperModeEnabled()
+# 直接返回安全值 true（假定已开启），setLocation catch 里的二次查询同样跳过。
+# 只影响这个纯展示用的开发者模式状态；虚拟定位(DVT)、配对、签名全走原路径。
+LOCSVC="$SSS/AltStore/Shell/LocationSimulationService.swift"
+if [ -f "$LOCSVC" ]; then
+  python3 - "$LOCSVC" <<'PYB1S'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+
+old_dev = '''    /// Reads Developer Mode from the device (lockdown DeveloperModeStatus).
+    func isDeveloperModeEnabled() async throws -> Bool
+    {
+        do
+        {
+            return try await gateway.isDeveloperModeEnabled()
+        }
+        catch
+        {
+            throw Self.mapError(error)
+        }
+    }
+'''
+new_dev = '''    /// Reads Developer Mode from the device (lockdown DeveloperModeStatus).
+    func isDeveloperModeEnabled() async throws -> Bool
+    {
+        // TreeNB[B1s]: VPN(utun / 10.7.0.1/32) 下 DeveloperModeStatus 的
+        // lockdownd_get_value 会进 Rust CStr::from_ptr 野指针 -16 → SIGSEGV
+        // （真机 .ips 2026-11-27 18:34，UUID 匹配的 dSYM 已确认）。
+        // VPN 下假定开发者模式已开启，不进设备 FFI；定位会话本身不动。
+        if tnbLocationVPNRouteActive() { return true }
+        do
+        {
+            return try await gateway.isDeveloperModeEnabled()
+        }
+        catch
+        {
+            throw Self.mapError(error)
+        }
+    }
+'''
+
+old_catch = '''            if let developerMode = try? await gateway.isDeveloperModeEnabled(), !developerMode
+'''
+new_catch = '''            // TreeNB[B1s]: VPN 下跳过 DeveloperModeStatus 查询，避免 FFI 野指针闪退。
+            if !tnbLocationVPNRouteActive(),
+               let developerMode = try? await gateway.isDeveloperModeEnabled(), !developerMode
+'''
+
+helper = '''
+// TreeNB[B1s] VPN 路由检测：LocalDevVPN 连上后系统多出 utun 接口。
+// 仅用于跳过定位页纯展示用的 DeveloperModeStatus 查询，不改变定位会话。
+@inline(__always)
+private func tnbLocationVPNRouteActive() -> Bool {
+    Minimuxer.shared.network.isUTunAvailable
+}
+// ===== /TreeNB[B1s] =====
+'''
+
+if 'TreeNB[B1s]' in s:
+    print('  B1s already present:', p.split('/')[-1])
+else:
+    if old_dev not in s:
+        raise SystemExit('FATAL[B1s]: 未找到 isDeveloperModeEnabled 锚点')
+    if old_catch not in s:
+        raise SystemExit('FATAL[B1s]: 未找到 setLocation catch 锚点')
+    s = s.replace(old_dev, new_dev, 1)
+    s = s.replace(old_catch, new_catch, 1)
+    idx = s.rfind('\n#endif')
+    if idx < 0:
+        raise SystemExit('FATAL[B1s]: 未找到文件末尾 #endif')
+    s = s[:idx] + '\\n' + helper + s[idx:]
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  B1s patched: LocationSimulationService.swift')
+PYB1S
+  grep -q 'TreeNB\[B1s\]' "$LOCSVC" \
+    || { echo "FATAL[B1s]: 定位 DeveloperModeStatus VPN 防护未写入" >&2; exit 2; }
+  ok "B1s: 定位页 DeveloperModeStatus 查询在 VPN 下已跳过"
+else
+  echo "FATAL[B1s]: 缺少 $LOCSVC，无法修复定位闪退" >&2
+  exit 2
+fi
+
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
 # 现象：点小组件里的容器 App，只进 openSSS 界面，不启动对应 guest。
