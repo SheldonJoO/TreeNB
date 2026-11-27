@@ -1158,8 +1158,10 @@ if anchor_connect in s and 'tnbForceFullScreen' not in s:
 open(p, 'w', encoding='utf-8').write(s)
 print('  SceneDelegate.swift: 主 window 强制全屏 helper 已注入')
 PY
-  grep -q 'tnbForceFullScreen' "$SCENEDELEGATE" \
-    || { echo "FATAL[B1g5a]: 主 window 全屏修复注入失败" >&2; exit 2; }
+  grep -q 'private func tnbForceFullScreen' "$SCENEDELEGATE" \
+    || { echo "FATAL[B1g5a]: 全屏 helper 方法体未注入（class 声明锚点失配）" >&2; exit 2; }
+  grep -q 'tnbForceFullScreen(window' "$SCENEDELEGATE" \
+    || { echo "FATAL[B1g5a]: 全屏 helper 调用点未注入（willConnectTo 锚点失配）" >&2; exit 2; }
   ok "主界面黑边修复：SceneDelegate 强制主 window 全屏已注入"
 fi
 
