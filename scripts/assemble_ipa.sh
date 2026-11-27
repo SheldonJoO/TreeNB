@@ -298,8 +298,8 @@ if [ -f "$APPS_SRC" ] && ! grep -q 'navigationItem.title = "🌲TreeNB Ⅱ"' "$A
   echo "致命错误: 应用页大标题未改成 TreeNB Ⅱ。" >&2
   exit 1
 fi
-if [ -f "$PROFILE_SRC" ] && ! grep -q 'title: "支持 TreeNB Ⅱ"' "$PROFILE_SRC"; then
-  echo "致命错误: 支持入口未改成 TreeNB Ⅱ。" >&2
+if [ -f "$PROFILE_SRC" ] && ! grep -q 'title: "支持与动力"' "$PROFILE_SRC"; then
+  echo "致命错误: 支持入口未改成支持与动力。" >&2
   exit 1
 fi
 # 4) 容器页：标题 inline（回顶部）+ 小组件图标改星标（与布局切换图标区分）。

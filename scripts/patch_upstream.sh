@@ -1023,9 +1023,9 @@ patch(about_path, [
 patch(profile_path, [
     ('title: NSLocalizedString("About openSSS", comment: ""),',
      'title: "关于 TreeNB Ⅱ",'),
-    # "我的"页帮助与支持区的"支持 openSSS" → TreeNB Ⅱ
+    # "我的"页帮助与支持区的"支持 openSSS" → 支持与动力
     ('title: NSLocalizedString("Support openSSS", comment: ""))',
-     'title: "支持 TreeNB Ⅱ")'),
+     'title: "支持与动力")'),
     # 过期提醒通知里的 openSSS 品牌
     ('content.title = "openSSS"', 'content.title = "TreeNB Ⅱ"'),
 ], '关于 TreeNB Ⅱ')
@@ -1040,8 +1040,8 @@ PY
     || { echo "FATAL[B1g]: 关于页品牌归一失败" >&2; exit 2; }
   grep -q 'navigationItem.title = "🌲TreeNB Ⅱ"' "$APPSVC" \
     || { echo "FATAL[B1g]: 应用页大标题品牌归一失败" >&2; exit 2; }
-  grep -q 'title: "支持 TreeNB Ⅱ"' "$PROFILE" \
-    || { echo "FATAL[B1g]: 支持入口品牌归一失败" >&2; exit 2; }
+  grep -q 'title: "支持与动力"' "$PROFILE" \
+    || { echo "FATAL[B1g]: 支持入口文案失败" >&2; exit 2; }
   ok "品牌归一：关于页 / 应用页 / 支持入口 → TreeNB Ⅱ 已校验"
 else
   warn "未找到 $ABOUT，跳过关于页品牌归一"
@@ -1107,62 +1107,73 @@ PY
   fi
 fi
 
-# B1g5a. 主 window 强制全屏（修「界面被缩进圆角卡片、四周黑边」）。
-#   真机反馈：主界面一直缩在屏幕中段、上下留黑，与 Xcode 版本无关。
-#   主 window 由 Main.storyboard 自动创建（AppDelegate/SceneDelegate 都不手动建），
-#   LiveContainer 的 guest window hook（makeKeyAndVisible / updateWindowScene）在宿主
-#   进程内可能改写了 windowScene，导致 storyboard 创建的 window 拿到非全屏尺寸。
-#   治本：在 willConnectTo 拿到 keyWindow 后，用 screen.coordinateSpace 强制铺满，
-#   并在首次 layout 再兜底一次（早期 screen.bounds 可能未稳定）。
+
+# B1g5a. 主界面强制全屏（修「界面缩进圆角卡片、上下大黑边」）。
+#   真机证据（截图 2026-11-27）：状态栏在最顶正常、内容左右占满、上下各约 1/6 纯黑、
+#   内容顶部圆角、垂直居中 —— 即 root view 高度只有约 68% 且被居中，不是 pageSheet
+#   （pageSheet 左右也会有边距）。根因：主 window / rootViewController.view 尺寸非全屏。
+#   上一版失败原因：注入点 willConnectTo 时 storyboard 的 window 尚未创建（nil），
+#   helper guard let window else { return } 直接返回，修复从未真正执行。
+#   本次修复：改到 sceneDidBecomeActive（window 已存在），遍历 scene.windows 找含
+#   rootViewController 的那个 window，强制 window.frame 与 root view.frame 都为 screen.bounds，
+#   并在下一个 runloop 再兜底一次（覆盖 storyboard 交接后的重布局）。
 if [ -f "$SCENEDELEGATE" ]; then
   python3 - "$SCENEDELEGATE" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 
+# helper：强制所有属于该 scene 的 window + 其 root view 铺满屏幕。
 helper = '''
-    // TreeNB: 主 window 强制全屏 —— 修 guest hook 改写 windowScene 导致主界面缩成圆角卡片、四周黑边。
-    private func tnbForceFullScreen(_ window: UIWindow?, scene: UIWindowScene) {
-        guard let window else { return }
+    // TreeNB: 主界面强制全屏 —— 修主 window/root view 非全屏导致上下大黑边、内容缩成圆角卡片。
+    // 注入在 sceneDidBecomeActive：此时 storyboard 的 window 一定已创建（willConnectTo 时为 nil）。
+    private func tnbForceFullScreen(scene: UIWindowScene) {
         let apply = {
-            // UIWindow.frame 使用 screen 坐标系；screen.bounds 即全屏（含状态栏区域）。
             let full = scene.screen.bounds
-            if window.frame != full {
-                window.frame = full
+            for window in scene.windows {
+                if window.frame != full {
+                    window.frame = full
+                }
+                if let root = window.rootViewController, root.view.frame != full {
+                    root.view.frame = full
+                    root.view.setNeedsLayout()
+                }
             }
         }
         apply()
-        // 首帧 layout 时 screen 尺寸才完全稳定，再兜底一次。
+        // storyboard 交接 / 首次 layout 后可能重排，下一帧再兜底一次。
         DispatchQueue.main.async(execute: apply)
     }
 '''
 
-# 插入 helper 到 SceneDelegate class 内（guard let windowScene 之前的方法区）。
-anchor_connect = '''        guard let windowScene = (scene as? UIWindowScene) else { return }
-'''
-inject = '''        guard let windowScene = (scene as? UIWindowScene) else { return }
-
-        // TreeNB: 强制主 window 全屏，防 guest window hook 把它缩成小尺寸（黑边）。
-        tnbForceFullScreen(window ?? windowScene.windows.first, scene: windowScene)
-'''
-if anchor_connect in s and 'tnbForceFullScreen' not in s:
-    s = s.replace(anchor_connect, inject, 1)
-    # 在 class 声明后插入 helper 方法
-    cls = 'final class SceneDelegate: UIResponder, UIWindowSceneDelegate\n{\n'
-    if cls in s:
+# 在 class 声明后插入 helper（幂等）。
+for cls in ('final class SceneDelegate: UIResponder, UIWindowSceneDelegate\n{\n',
+            'class SceneDelegate: NSObject, UIWindowSceneDelegate {\n'):
+    if cls in s and 'private func tnbForceFullScreen' not in s:
         s = s.replace(cls, cls + helper, 1)
-    else:
-        cls2 = 'class SceneDelegate: NSObject, UIWindowSceneDelegate {\n'
-        s = s.replace(cls2, cls2 + helper, 1)
+        break
+
+# 在 sceneDidBecomeActive 内调用：锚点用 debugLog 行（该方法唯一）。
+anchor_active = '''        debugLog("[SceneDelegate] sceneDidBecomeActive() invoked")
+'''
+inject_active = '''        debugLog("[SceneDelegate] sceneDidBecomeActive() invoked")
+
+        // TreeNB: 主界面强制全屏，修上下大黑边（window 此时已存在）。
+        if let windowScene = (scene as? UIWindowScene) {
+            tnbForceFullScreen(scene: windowScene)
+        }
+'''
+if anchor_active in s and 'tnbForceFullScreen(scene:' not in s:
+    s = s.replace(anchor_active, inject_active, 1)
 
 open(p, 'w', encoding='utf-8').write(s)
-print('  SceneDelegate.swift: 主 window 强制全屏 helper 已注入')
+print('  SceneDelegate.swift: 主界面强制全屏 helper（sceneDidBecomeActive）已注入')
 PY
   grep -q 'private func tnbForceFullScreen' "$SCENEDELEGATE" \
-    || { echo "FATAL[B1g5a]: 全屏 helper 方法体未注入（class 声明锚点失配）" >&2; exit 2; }
-  grep -q 'tnbForceFullScreen(window' "$SCENEDELEGATE" \
-    || { echo "FATAL[B1g5a]: 全屏 helper 调用点未注入（willConnectTo 锚点失配）" >&2; exit 2; }
-  ok "主界面黑边修复：SceneDelegate 强制主 window 全屏已注入"
+    || { echo "FATAL[B1g5a]: 全屏 helper 方法体未注入" >&2; exit 2; }
+  grep -q 'tnbForceFullScreen(scene:' "$SCENEDELEGATE" \
+    || { echo "FATAL[B1g5a]: 全屏 helper 调用点未注入" >&2; exit 2; }
+  ok "主界面黑边修复：sceneDidBecomeActive 强制全屏已注入"
 fi
 
 # B1g5. 闪屏治标：SceneDelegate.sceneWillEnterForeground 在最早时机盖【统一品牌启动画面】，
