@@ -1466,6 +1466,61 @@ PY
   ok "定位空闲状态文案已校验（未开始，不再误报连接失败）"
 fi
 
+# B1j. 启动期强制设备往返 → 延后到用时（修 LocalDevVPN 开着时"打开就闪退"）
+# ---------------------------------------------------------------------------
+# 真机 .ips（2026-11-27 09:05:36，UUID F92EDE3F… 与 0836 包一致）证据：
+#   EXC_BAD_ACCESS / SIGSEGV，fault addr 0xfffffffffffffff0，栈顶 _platform_strlen，
+#   崩溃队列 com.apple.root.default-qos（= Task.detached 启动序列），
+#   调用帧 1203万~1709万偏移落在 DeviceGatewayAPI(Minimuxer Swift FFI)+Rust 静态库段。
+# 机理：AppBootManager.startMinimuxer() 启动期调 fetchUDID(forceLive: true)，
+#   强制真实设备往返。LocalDevVPN 开着 → 10.7.0.1/32 路由生效 → minimuxer 进入
+#   localVPN 隧道枚举/DVT 握手路径，从 Swift/Rust FFI 读到跨线程的 nil String →
+#   strlen(NULL) → 崩。VPN 关着时该路径走 notReachable 被 do/catch 兜住 → 不崩。
+# 修法：启动期的这次 UDID 在线校验改成 no-op（配对文件存在即视为已配对）。真实的
+#   设备在线校验并未丢失——它推迟到用户首次用定位/签名时，走
+#   ensureMinimuxerReady() → isReady(withNetworkCheck) 完整检查。这样启动完全不
+#   触发强制设备往返，VPN 常开也能正常打开 App，功能保留。
+BOOTMGR="$SSS/SideStore/AppBootManager.swift"
+if [ -f "$BOOTMGR" ]; then
+  python3 - "$BOOTMGR" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+
+old = '''        // Validate the pairing by trying to fetch the UDID
+        do {
+            debugLog("[AppBootManager] startMinimuxer(): Minimuxer fetchUDID() based connection starting...")
+            let deviceUDID = try await fetchUDID(forceLive: true)
+            debugLog("[AppBootManager] startMinimuxer(): Minimuxer fetchUDID() based connection test SUCCEEDED. UDID: \\(deviceUDID)")
+            self.needsPairingPrompt = false
+        } catch {'''
+new = '''        // TreeNB[B1j]: 启动期不做强制设备往返。LocalDevVPN 开着时，
+        // fetchUDID(forceLive:true) 会进入 minimuxer FFI 的 nil String → strlen(NULL)
+        // → SIGSEGV（真机 .ips 2026-11-27 09:05 已确认）。
+        // 这里整个校验块改成 no-op：配对文件存在即视为已配对。真实的设备在线校验
+        // 延后到用户首次用定位/签名时，走 ensureMinimuxerReady() → isReady(withNetworkCheck)。
+        do {
+            debugLog("[AppBootManager] startMinimuxer(): TreeNB skip boot-time live UDID check (defer to first use)")
+            self.needsPairingPrompt = false
+        } catch {'''
+
+if old in s:
+    s = s.replace(old, new, 1)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  AppBootManager.swift: 启动期强制设备校验改为 no-op（在线校验延后到用时）')
+elif 'TreeNB[B1j]' in s:
+    print('  AppBootManager.swift: B1j 已就位（幂等）')
+else:
+    raise SystemExit('FATAL[B1j]: 未定位到启动期 fetchUDID(forceLive: true) 锚点')
+PY
+  grep -q 'TreeNB\[B1j\]' "$BOOTMGR" \
+    || { echo "FATAL[B1j]: 启动期设备往返修复未写入" >&2; exit 2; }
+  ok "启动期设备往返修复已校验（缓存优先，VPN 常开不触发 FFI 强制往返）"
+else
+  echo "FATAL[B1j]: 缺少 $BOOTMGR，无法修复启动期设备往返" >&2
+  exit 2
+fi
+
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
 # 现象：点小组件里的容器 App，只进 openSSS 界面，不启动对应 guest。

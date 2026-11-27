@@ -573,6 +573,24 @@ if ! echo "$BUILD_VER" | grep -Eq '^[0-9]{12}$'; then
 fi
 echo "  全 App 玻璃 + 时间戳版本号校验通过（${SHORT_VER} / ${BUILD_VER}）"
 
+# ★ B1j 硬校验（2026-11-27 闪退根因）：启动期强制设备往返必须已移除，
+# 否则 LocalDevVPN 开着时 fetchUDID(forceLive:true) 触发 minimuxer FFI
+# strlen(NULL) → SIGSEGV（真机 .ips 09:05 已确认）。
+BOOTMGR_SRC="upstream/openSSS/SideStore/AppBootManager.swift"
+if [ -f "$BOOTMGR_SRC" ]; then
+  if ! grep -q 'TreeNB\[B1j\]' "$BOOTMGR_SRC"; then
+    echo "致命错误: AppBootManager 未打 B1j 补丁（启动期强制设备往返未移除，VPN 开着会闪退）。" >&2
+    exit 1
+  fi
+  if grep -q 'fetchUDID(forceLive: true)' "$BOOTMGR_SRC"; then
+    echo "致命错误: AppBootManager 仍残留启动期 fetchUDID(forceLive: true)。" >&2
+    exit 1
+  fi
+  echo "  B1j 启动期防闪退校验通过（无强制设备往返）"
+else
+  echo "警告: 找不到 $BOOTMGR_SRC，跳过 B1j 校验" >&2
+fi
+
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
 
