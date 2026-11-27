@@ -1751,7 +1751,10 @@ new_dev = '''    /// Reads Developer Mode from the device (lockdown DeveloperMod
         // lockdownd_get_value 会进 Rust CStr::from_ptr 野指针 -16 → SIGSEGV
         // （真机 .ips 2026-11-27 18:34，UUID 匹配的 dSYM 已确认）。
         // VPN 下假定开发者模式已开启，不进设备 FFI；定位会话本身不动。
-        if tnbLocationVPNRouteActive() { return true }
+        if tnbLocationVPNRouteActive() {
+            debugLog("[TreeNB][B1s] VPN active, skip DeveloperModeStatus lockdownd query")
+            return true
+        }
         do
         {
             return try await gateway.isDeveloperModeEnabled()
