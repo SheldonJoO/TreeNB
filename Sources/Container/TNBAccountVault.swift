@@ -403,15 +403,27 @@ final class TNBAccountVault: ObservableObject {
               let p12 = record.certificateP12 else {
             throw TNVaultError.missingCertificate
         }
-        let imported = ImportedAccount(
-            version: ImportedAccount.currentVersion,
-            email: record.email,
-            password: record.password,
-            certificateData: p12,
-            certificatePassword: record.certificatePassword,
-            anisetteIdentifier: record.anisetteIdentifier ?? "",
-            anisetteAdiBlob: record.anisetteAdiBlob ?? ""
-        )
+        let imported: ImportedAccount
+        if let certPass = record.certificatePassword {
+            imported = ImportedAccount(
+                version: ImportedAccount.currentVersion,
+                email: record.email,
+                password: record.password,
+                certificateData: p12,
+                certificatePassword: certPass,
+                anisetteIdentifier: record.anisetteIdentifier ?? "",
+                anisetteAdiBlob: record.anisetteAdiBlob ?? ""
+            )
+        } else {
+            imported = ImportedAccount(
+                version: ImportedAccount.currentVersion,
+                email: record.email,
+                password: record.password,
+                certificateData: p12,
+                anisetteIdentifier: record.anisetteIdentifier ?? "",
+                anisetteAdiBlob: record.anisetteAdiBlob ?? ""
+            )
+        }
         return try ImportExport.encryptAccount(imported, filePassword: filePassword)
     }
 

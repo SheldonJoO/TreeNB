@@ -12,6 +12,25 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - iOS 15 兼容导航容器（NavigationStack 是 iOS 16+）
+private struct TNBNavigation<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        Group {
+            if #available(iOS 16.0, *) {
+                NavigationStack { content }
+            } else {
+                NavigationView { content }
+            }
+        }
+    }
+}
+
 struct TNAccountVaultView: View {
     @ObservedObject private var vault = TNBAccountVault.shared
     @State private var pendingAccount: TNBAccountRecord?
@@ -317,7 +336,7 @@ private struct TeamPickerView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        TNBNavigation {
             List {
                 Section {
                     Text("为 \(account.email) 选择要启用的团队。切换后签名和续签都会使用这个团队，已保存的其它 Apple ID 不受影响。")
