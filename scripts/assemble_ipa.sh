@@ -606,7 +606,7 @@ grep -q 'case missingCredentials' "$VAULT_SRC" || {
   echo "致命错误: 保险库缺少无凭据账号保护，切换会写入半成品状态。" >&2; exit 1;
 }
 IDVG_SRC="upstream/openSSS/Dependencies/minimuxer/DeviceGateway/idevice/IdeviceGateway.swift"
-grep -q 'TreeNB\[B1t\]' "$IDVG_SRC" || {
+grep -q 'private let gatewayFFIQueue' "$IDVG_SRC" || {
   echo "致命错误: Minimuxer FFI 串行化补丁未写入，重签仍可能并发释放 AFC 句柄。" >&2; exit 1;
 }
 if grep -q 'try await withFFIDispatch {' "$IDVG_SRC"; then

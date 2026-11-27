@@ -2123,7 +2123,7 @@ python3 - "$IDVG" <<'PYB1T'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-if 'TreeNB[B1t]' not in s:
+if 'com.treenb.idevice.ffi' not in s:
     anchor = '    private var pairingFile: OpaquePointer? = nil\n'
     if anchor not in s:
         raise SystemExit('FATAL[B1t]: pairingFile 锚点缺失')

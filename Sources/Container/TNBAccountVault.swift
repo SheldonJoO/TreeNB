@@ -139,18 +139,26 @@ final class TNBAccountVault: ObservableObject {
             }
             var existing = result[index]
             if existing.id != preferredID, record.id == preferredID { existing.id = record.id }
-            if existing.password == nil { existing.password = record.password }
-            if existing.adsid == nil { existing.adsid = record.adsid }
-            if existing.xcodeToken == nil { existing.xcodeToken = record.xcodeToken }
+            if existing.password?.isEmpty != false { existing.password = record.password }
+            if existing.adsid?.isEmpty != false { existing.adsid = record.adsid }
+            if existing.xcodeToken?.isEmpty != false { existing.xcodeToken = record.xcodeToken }
             if existing.certificateP12 == nil { existing.certificateP12 = record.certificateP12 }
             if existing.certificatePassword == nil { existing.certificatePassword = record.certificatePassword }
             if existing.anisetteIdentifier == nil { existing.anisetteIdentifier = record.anisetteIdentifier }
             if existing.anisetteAdiBlob == nil { existing.anisetteAdiBlob = record.anisetteAdiBlob }
             if existing.activeTeamIdentifier == nil { existing.activeTeamIdentifier = record.activeTeamIdentifier }
-            for team in record.teams where !existing.teams.contains(team) { existing.teams.append(team) }
+            for team in record.teams where !existing.teams.contains(where: { $0.identifier == team.identifier }) {
+                existing.teams.append(team)
+            }
             var certificates = existing.certificates ?? []
-            for certificate in record.certificates ?? [] where !certificates.contains(certificate) {
-                certificates.append(certificate)
+            for certificate in record.certificates ?? [] {
+                if let certificateIndex = certificates.firstIndex(where: { $0.teamID == certificate.teamID }) {
+                    if record.updatedAt > existing.updatedAt {
+                        certificates[certificateIndex] = certificate
+                    }
+                } else {
+                    certificates.append(certificate)
+                }
             }
             existing.certificates = certificates.isEmpty ? nil : certificates
             if record.updatedAt > existing.updatedAt { existing.updatedAt = record.updatedAt }
@@ -206,7 +214,7 @@ final class TNBAccountVault: ObservableObject {
                 updatedAt: Date()
             )
             if var existing = byEmail[email.lowercased()] {
-                if !existing.teams.contains(record.teams[0]) {
+                if !existing.teams.contains(where: { $0.identifier == record.teams[0].identifier }) {
                     existing.teams.append(record.teams[0])
                 }
                 if record.activeTeamIdentifier != nil {
@@ -290,7 +298,9 @@ final class TNBAccountVault: ObservableObject {
         for team in accountTeams {
             let record = TNBTeamRecord(identifier: team.identifier, name: team.name,
                                        type: team.type.localizedDescription)
-            if !accounts[index].teams.contains(record) { accounts[index].teams.append(record) }
+            if !accounts[index].teams.contains(where: { $0.identifier == record.identifier }) {
+                accounts[index].teams.append(record)
+            }
         }
         if let activeTeamID = accountTeams.first(where: { $0.isActiveTeam })?.identifier {
             accounts[index].activeTeamIdentifier = activeTeamID
@@ -509,7 +519,9 @@ final class TNBAccountVault: ObservableObject {
         accounts[index].updatedAt = Date()
         if let tid = Self.teamID(from: imported.certificateData, password: imported.certificatePassword) {
             let team = TNBTeamRecord(identifier: tid, name: "TreeNB 导入的团队", type: "电脑证书")
-            if !accounts[index].teams.contains(team) { accounts[index].teams.append(team) }
+            if !accounts[index].teams.contains(where: { $0.identifier == tid }) {
+                accounts[index].teams.append(team)
+            }
             try ensureTeamRecord(email: imported.email, teamID: tid)
         }
         persist()
@@ -545,7 +557,9 @@ final class TNBAccountVault: ObservableObject {
         storeCertificate(p12, password: password, at: &record)
         if let teamID = Self.teamID(from: p12, password: password) {
             let team = TNBTeamRecord(identifier: teamID, name: "证书中的开发者团队", type: "证书识别")
-            if !record.teams.contains(team) { record.teams.append(team) }
+            if !record.teams.contains(where: { $0.identifier == teamID }) {
+                record.teams.append(team)
+            }
             if record.activeTeamIdentifier == nil { record.activeTeamIdentifier = teamID }
             try ensureTeamRecord(email: record.email, teamID: teamID)
         }
@@ -573,7 +587,9 @@ final class TNBAccountVault: ObservableObject {
             $0.email.caseInsensitiveCompare(email) == .orderedSame
         }) else { return }
         var merged = accounts[index].teams
-        for team in teams where !merged.contains(team) { merged.append(team) }
+        for team in teams where !merged.contains(where: { $0.identifier == team.identifier }) {
+            merged.append(team)
+        }
         accounts[index].teams = merged
         accounts[index].updatedAt = Date()
         persist()
