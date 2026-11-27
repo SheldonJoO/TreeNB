@@ -112,10 +112,30 @@ jobs:
         if: success()
         run: ./scripts/assemble_ipa.sh
 
+      - name: Package dSYM for crash symbolication
+        if: success()
+        run: |
+          set -e
+          mkdir -p build
+          if compgen -G "$ARCHIVE_PATH/dSYMs/*.dSYM" > /dev/null; then
+            (cd "$ARCHIVE_PATH/dSYMs" && zip -q -r "$GITHUB_WORKSPACE/build/TreeNB-xcode26-dSYM.zip" *.dSYM)
+            ls -lh build/TreeNB-xcode26-dSYM.zip
+          else
+            echo "WARNING: no dSYM found in $ARCHIVE_PATH/dSYMs" >&2
+          fi
+
       - name: Upload unsigned artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TreeNB-xcode26-unsigned
           path: build/*.ipa
+          if-no-files-found: ignore
+
+      - name: Upload dSYM artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TreeNB-xcode26-dSYM
+          path: build/TreeNB-xcode26-dSYM.zip
           if-no-files-found: ignore
