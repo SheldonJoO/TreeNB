@@ -112,6 +112,10 @@ jobs:
         if: success()
         run: ./scripts/assemble_ipa.sh
 
+      - name: Generate artifact checksums
+        if: success()
+        run: shasum -a 256 build/*.ipa > build/SHA256SUMS.txt
+
       - name: Package dSYM for crash symbolication
         if: success()
         run: |
@@ -129,7 +133,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TreeNB-xcode26-unsigned
-          path: build/*.ipa
+          path: |
+            build/*.ipa
+            build/SHA256SUMS.txt
           if-no-files-found: ignore
 
       - name: Upload dSYM artifact

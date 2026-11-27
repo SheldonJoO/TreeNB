@@ -2080,12 +2080,139 @@ if 'TreeNB[B1w]' not in s:
     s = s.replace(old, new, 1)
     open(ai_path, 'w', encoding='utf-8').write(s)
     print('  B1w patched: AppleIDsViewController.swift (vault activation)')
+
+# 4) 普通登录成功也必须收编；否则从原 Apple ID 页登录的新 id 不会进保险库。
+s = open(ai_path, encoding='utf-8').read()
+if 'TreeNB[B1w2]' not in s:
+    old = '''                debugLog("[AppleIDsVC] Signed in for team: \\(result.team.name) (\\(result.team.identifier))")
+                didSignIn = true
+'''
+    new = '''                debugLog("[AppleIDsVC] Signed in for team: \\(result.team.name) (\\(result.team.identifier))")
+                // TreeNB[B1w2]: 登录成功后立即归档，切换时不再要求重新登录。
+                TNBAccountVault.shared.captureCurrentAsNewAccount(source: "local")
+                didSignIn = true
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1w2]: 普通登录 capture 锚点缺失')
+    s = s.replace(old, new, 1)
+    open(ai_path, 'w', encoding='utf-8').write(s)
+    print('  B1w2 patched: AppleIDsViewController.swift (capture after sign-in)')
 PYB1W
 
 for f in "$KEYCHAIN_FILE" "$IMPEXPORT_FILE" "$APPLE_IDS_FILE"; do
   grep -q 'TreeNB\[B1w\]' "$f" || { echo "FATAL[B1w]: 保险库补丁未写入 $f" >&2; exit 2; }
 done
 ok "B1w: 多 Apple ID 保险库（切换即激活 / 团队可选 / 电脑证书导入）"
+
+# B1t. Minimuxer FFI 生命周期串行化：修重签 AFC 堆损坏 / malloc abort
+# ---------------------------------------------------------------------------
+# 21:45 .ips 的证据是 libmalloc "pointer being freed was not allocated"，
+# 崩溃发生在 _realloc（Rust AfcPacket::serialize 扩容）而非 Swift 数组。
+# 上游 withFFIDispatch 默认 queue.async 到 .global()，同一 gateway 的多次
+# FFI 调用可并发；invalidateConnection() 又能从任意队列直接 adapter_free /
+# rsd_handshake_free。AFC 写入尚未返回时隧道被释放，Rust 侧就会操作已释放内存。
+# Vec 预分配只能少扩容一次，不能修复句柄生命周期。这里同时做三件事：
+#   ① 每个 IdeviceGateway 用独占串行 FFI 队列；
+#   ② 所有 FFI 操作与 invalidateConnection 共用递归锁，内部重连不死锁，
+#      外部失效会等当前操作完成再释放句柄；
+#   ③ stop 只 cleanup 一次，不再 super.stop() 二次 cleanup；
+#      补齐 TCP provider / 临时 pairing file 的失败路径释放。
+IDVG="$SSS/Dependencies/minimuxer/DeviceGateway/idevice/IdeviceGateway.swift"
+[ -f "$IDVG" ] || { echo "FATAL[B1t]: 缺少 $IDVG" >&2; exit 2; }
+python3 - "$IDVG" <<'PYB1T'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TreeNB[B1t]' not in s:
+    anchor = '    private var pairingFile: OpaquePointer? = nil\n'
+    if anchor not in s:
+        raise SystemExit('FATAL[B1t]: pairingFile 锚点缺失')
+    s = s.replace(anchor, '''    // TreeNB[B1t]: 同一 gateway 的所有 FFI 调用串行，失效操作不得并发释放句柄。
+    private let gatewayFFIQueue = DispatchQueue(label: "com.treenb.idevice.ffi")
+    private let gatewayFFILock = NSRecursiveLock()
+
+    private func withGatewayFFI<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withFFIDispatch(on: gatewayFFIQueue) {
+            self.gatewayFFILock.lock()
+            defer { self.gatewayFFILock.unlock() }
+            return try body()
+        }
+    }
+
+''' + anchor, 1)
+    old = '''    public override func invalidateConnection() {
+        debugLog("[IdeviceGateway] invalidateConnection() called - clearing stale adapter and handshake")
+        locationStateLock.lock()
+'''
+    new = '''    public override func invalidateConnection() {
+        gatewayFFILock.lock()
+        defer { gatewayFFILock.unlock() }
+        debugLog("[IdeviceGateway] invalidateConnection() called - clearing stale adapter and handshake")
+        locationStateLock.lock()
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1t]: invalidateConnection 锚点缺失')
+    s = s.replace(old, new, 1)
+    old = '''    public override func stop() async throws {
+        try await withFFIDispatch {
+            self.cleanup()
+        }
+        try await super.stop()
+    }
+'''
+    new = '''    public override func stop() async throws {
+        try await withGatewayFFI {
+            self.cleanup()
+        }
+    }
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1t]: stop 锚点缺失')
+    s = s.replace(old, new, 1)
+    old = '''        guard let tempPairingFile = tempPairingFile else {
+            throw IdeviceGatewayError(.connectionFailed, reason: "Temporary pairing file was nil")
+        }
+
+        var provider: OpaquePointer? = nil
+'''
+    new = '''        guard let tempPairingFile = tempPairingFile else {
+            throw IdeviceGatewayError(.connectionFailed, reason: "Temporary pairing file was nil")
+        }
+        defer { idevice_pairing_file_free(tempPairingFile) }
+
+        var provider: OpaquePointer? = nil
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1t]: temporary pairing file 锚点缺失')
+    s = s.replace(old, new, 1)
+    old = '''        var providerToFree: OpaquePointer? = provider
+        defer {
+            if let ptr = providerToFree {
+                idevice_provider_free(ptr)
+            }
+        }
+
+        var client: OpaquePointer? = nil
+        let connectErr = connect(provider, &client)
+        if let connectErr = connectErr {
+            providerToFree = nil
+'''
+    new = '''        defer { idevice_provider_free(provider) }
+
+        var client: OpaquePointer? = nil
+        let connectErr = connect(provider, &client)
+        if let connectErr = connectErr {
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1t]: provider 所有权锚点缺失')
+    s = s.replace(old, new, 1)
+    s = s.replace('try await withFFIDispatch {', 'try await withGatewayFFI {')
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  B1t patched: IdeviceGateway.swift (serial FFI + handle ownership)')
+PYB1T
+grep -q 'TreeNB\[B1t\]' "$IDVG" || { echo "FATAL[B1t]: FFI 串行化补丁未写入" >&2; exit 2; }
+! grep -q 'try await withFFIDispatch {' "$IDVG" || { echo "FATAL[B1t]: 仍有未串行化 FFI 调用" >&2; exit 2; }
+ok "B1t: Minimuxer 每网关串行 FFI + 句柄生命周期修复"
 
 # B1x. 重签/换 id 安装提示中文化：明确「安装这步自动关闭不是闪退」
 # ---------------------------------------------------------------------------
@@ -2110,21 +2237,18 @@ grep -q 'TreeNB\[B1x\]' "$RESIGN_VC" \
   || { echo "FATAL[B1x]: 重签安装提示未写入" >&2; exit 2; }
 ok "B1x: 重签安装终止提示改为中文，明确不是闪退"
 
-# B1y. 启动期 CoreLocation 断言：音频保活不再顺手初始化定位服务
+# B1y. 启动期 CoreLocation 断言：禁用/音频模式不得初始化定位服务
 # ---------------------------------------------------------------------------
-# 真机 23:22 .ips（build 202611272230）符号化：
-#   AppDelegate.didFinishLaunching → BackgroundServiceManager.ensure... →
-#   BackgroundAudioService.start() → BackgroundLocationService.shared（dispatch_once）
-#   → BackgroundLocationService.init() → CoreLocation 断言 → SIGABRT。
-# 根因：音频保活 start() 里调用 BackgroundLocationService.shared.stop()，
-# 仅仅为了停掉定位，却把 CLLocationManager 创建提前到了每次启动。
-# 修法：① 音频保活不再碰定位服务；② 定位服务设置推迟到真正选中定位模式，
-# 且不再在 init 里打开 allowsBackgroundLocationUpdates（该赋值会触发断言）。
+# 23:22 .ips：ensureBackgroundServicesStarted → BackgroundAudioService.start()
+# → BackgroundLocationService.shared（dispatch_once）→ CLLocationManager 断言。
+# 除音频 start 外，Manager.stop() 在禁用定位模式时也会访问 shared，照样触发初始化。
+# 因此 Manager 必须真正惰性持有定位服务；后台定位标志只在用户已选定位且授权后开启。
 B1Y_AUDIO="$SSS/SideStore/Core/BackgroundServices/BackgroundAudioService.swift"
 B1Y_LOC="$SSS/SideStore/Core/BackgroundServices/BackgroundLocationService.swift"
-python3 - "$B1Y_AUDIO" "$B1Y_LOC" <<'PYB1Y'
+B1Y_MGR="$SSS/SideStore/Core/BackgroundServices/BackgroundService.swift"
+python3 - "$B1Y_AUDIO" "$B1Y_LOC" "$B1Y_MGR" <<'PYB1Y'
 import sys
-audio_path, loc_path = sys.argv[1], sys.argv[2]
+audio_path, loc_path, manager_path = sys.argv[1:]
 
 s = open(audio_path, encoding='utf-8').read()
 if 'TreeNB[B1y]' not in s:
@@ -2133,8 +2257,6 @@ if 'TreeNB[B1y]' not in s:
 '''
     new = '''    public func start() -> Bool {
         // TreeNB[B1y]: 音频保活不初始化 CoreLocation。
-        // 原先这里调用 BackgroundLocationService.shared.stop() 只为停定位，
-        // 却让 CLLocationManager 在每次启动时创建，iOS 27 上触发断言闪退。
         print("TreeNB[B1y]: audio keepalive, no CoreLocation init")
 '''
     if old not in s:
@@ -2146,21 +2268,103 @@ if 'TreeNB[B1y]' not in s:
 s = open(loc_path, encoding='utf-8').read()
 if 'TreeNB[B1y]' not in s:
     old = '        self.manager.allowsBackgroundLocationUpdates = true\n'
-    new = '''        // TreeNB[B1y]: 不在 init 里打开后台定位。
-        // Info.plist 已声明 UIBackgroundModes=location；该赋值在 iOS 27 上
-        // 会在启动阶段直接抛 NSAssertion，且此时用户根本没选定位保活。
+    new = '''        // TreeNB[B1y]: 延迟到用户真正启用定位保活且已授权后再设置。
         print("TreeNB[B1y]: location service init without background flag")
 '''
     if old not in s:
         raise SystemExit('FATAL[B1y]: allowsBackgroundLocationUpdates 锚点缺失')
     s = s.replace(old, new, 1)
+    old = '''        } else if status == .authorizedAlways || status == .authorizedWhenInUse {
+            startLocationUpdates()
+        }
+'''
+    new = '''        } else if status == .authorizedAlways || status == .authorizedWhenInUse {
+            manager.allowsBackgroundLocationUpdates = true
+            startLocationUpdates()
+        } else {
+            runningState = false
+            return false
+        }
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1y]: 定位授权启动锚点缺失')
+    s = s.replace(old, new, 1)
+    old = '''                    self.startLocationUpdates()
+'''
+    new = '''                    self.manager.allowsBackgroundLocationUpdates = true
+                    self.startLocationUpdates()
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1y]: 授权回调启动锚点缺失')
+    s = s.replace(old, new, 1)
     open(loc_path, 'w', encoding='utf-8').write(s)
-    print('  B1y patched: BackgroundLocationService.init')
+    print('  B1y patched: BackgroundLocationService lazy background updates')
+
+s = open(manager_path, encoding='utf-8').read()
+if 'TreeNB[B1y]' not in s:
+    old = '''    public static var shared: any BackgroundService {
+        service(for: UserDefaults.standard.backgroundServiceMode)
+    }
+
+    public static func service(for mode: BackgroundServiceMode) -> any BackgroundService {
+        switch mode {
+        case .audio:
+            return BackgroundAudioService.shared
+        case .location:
+            return BackgroundLocationService.shared
+        }
+    }
+
+    public static func stop() {
+        shared.stop()
+    }
+'''
+    new = '''    private static let audioService = BackgroundAudioService.shared
+    private static var locationService: BackgroundLocationService?
+
+    public static var shared: any BackgroundService {
+        service(for: UserDefaults.standard.backgroundServiceMode)
+    }
+
+    public static func service(for mode: BackgroundServiceMode) -> any BackgroundService {
+        switch mode {
+        case .audio:
+            return audioService
+        case .location:
+            if let locationService { return locationService }
+            let service = BackgroundLocationService.shared
+            locationService = service
+            return service
+        }
+    }
+
+    public static func stop() {
+        // TreeNB[B1y]: 停止操作不得为了 stop 而创建定位服务。
+        switch UserDefaults.standard.backgroundServiceMode {
+        case .audio: audioService.stop()
+        case .location: locationService?.stop()
+        }
+    }
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1y]: BackgroundServiceManager 惰性服务锚点缺失')
+    s = s.replace(old, new, 1)
+    old = '''    public static func switchTo(mode: BackgroundServiceMode) {
+        shared.stop()
+'''
+    new = '''    public static func switchTo(mode: BackgroundServiceMode) {
+        stop()
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1y]: BackgroundServiceManager.switchTo 锚点缺失')
+    s = s.replace(old, new, 1)
+    open(manager_path, 'w', encoding='utf-8').write(s)
+    print('  B1y patched: BackgroundServiceManager lazy location service')
 PYB1Y
-for f in "$B1Y_AUDIO" "$B1Y_LOC"; do
+for f in "$B1Y_AUDIO" "$B1Y_LOC" "$B1Y_MGR"; do
   grep -q 'TreeNB\[B1y\]' "$f" || { echo "FATAL[B1y]: 保活补丁未写入 $f" >&2; exit 2; }
 done
-ok "B1y: 启动期不再初始化 CoreLocation（修 23:22 启动闪退）"
+ok "B1y: 禁用/音频模式不初始化 CoreLocation，定位模式按需启用"
 
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------

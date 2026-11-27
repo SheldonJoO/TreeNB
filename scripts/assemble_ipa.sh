@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ARCHIVE_PATH="${ARCHIVE_PATH:-build/TreeNB.xcarchive}"
 SCHEME="${SCHEME:-TreeNB}"
-STAMP=$(date +%Y%m%d%H%M)
+STAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
 OUT="build/TreeNB-${STAMP}-unsigned.ipa"
 
 echo "==> [1/4] 解出 archive 的 Payload"
@@ -596,11 +596,35 @@ for f in upstream/openSSS/AltStore/Core/Components/Keychain.swift \
     echo "致命错误: 多账号保险库补丁未注入 $f。" >&2; exit 1
   }
 done
+grep -q 'TreeNB\[B1w2\]' upstream/openSSS/AltStore/Shell/AppleIDsViewController.swift || {
+  echo "致命错误: 普通 Apple ID 登录成功后未自动收编进保险库。" >&2; exit 1;
+}
+grep -q 'var certificates: \[TNBCertificateRecord\]?' "$VAULT_SRC" || {
+  echo "致命错误: 保险库缺少按团队隔离的证书存储。" >&2; exit 1;
+}
+grep -q 'case missingCredentials' "$VAULT_SRC" || {
+  echo "致命错误: 保险库缺少无凭据账号保护，切换会写入半成品状态。" >&2; exit 1;
+}
+IDVG_SRC="upstream/openSSS/Dependencies/minimuxer/DeviceGateway/idevice/IdeviceGateway.swift"
+grep -q 'TreeNB\[B1t\]' "$IDVG_SRC" || {
+  echo "致命错误: Minimuxer FFI 串行化补丁未写入，重签仍可能并发释放 AFC 句柄。" >&2; exit 1;
+}
+if grep -q 'try await withFFIDispatch {' "$IDVG_SRC"; then
+  echo "致命错误: IdeviceGateway 仍有绕过串行队列的 FFI 调用。" >&2; exit 1
+fi
+TNB_FFI_STRINGS=$(mktemp)
+strings "$APP/$MAIN_EXE" > "$TNB_FFI_STRINGS" 2>/dev/null || true
+if ! grep -q 'com.treenb.idevice.ffi' "$TNB_FFI_STRINGS"; then
+  rm -f "$TNB_FFI_STRINGS"
+  echo "致命错误: 主二进制缺少 B1t 串行 FFI 队列标记，补丁没有真正编入。" >&2; exit 1
+fi
+rm -f "$TNB_FFI_STRINGS"
 grep -q 'TreeNB\[B1x\]' "upstream/openSSS/AltStore/Authentication/ResignAltStoreViewController.swift" || {
   echo "致命错误: 重签安装终止提示未中文化（B1x）。" >&2; exit 1
 }
 for f in upstream/openSSS/SideStore/Core/BackgroundServices/BackgroundAudioService.swift \
-         upstream/openSSS/SideStore/Core/BackgroundServices/BackgroundLocationService.swift; do
+         upstream/openSSS/SideStore/Core/BackgroundServices/BackgroundLocationService.swift \
+         upstream/openSSS/SideStore/Core/BackgroundServices/BackgroundService.swift; do
   grep -q 'TreeNB\[B1y\]' "$f" || {
     echo "致命错误: 启动期 CoreLocation 防闪退补丁未写入 $f。" >&2; exit 1
   }
@@ -612,7 +636,7 @@ if [ -f "build/idevice-src/idevice/src/services/afc/packet.rs" ]; then
 else
   echo "警告: 找不到 build/idevice-src/.../packet.rs，跳过 B1z 校验" >&2
 fi
-echo "  多 Apple ID 保险库（B1w）、安装提示（B1x）、启动保活（B1y）、AFC（B1z）校验通过"
+echo "  多 Apple ID 保险库（B1w/B1w2）、安装提示（B1x）、启动保活（B1y）、FFI 生命周期（B1t）、AFC（B1z）校验通过"
 
 # ★ B1j 硬校验（2026-11-27 闪退根因）：启动期强制设备往返必须已移除，
 # 否则 LocalDevVPN 开着时 fetchUDID(forceLive:true) 触发 minimuxer FFI

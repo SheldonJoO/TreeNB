@@ -270,7 +270,9 @@ struct TNAccountVaultView: View {
 
     private func refreshTeamsFromDatabase() {
         let email = Keychain.shared.appleIDEmailAddress ?? ""
-        let teams = (try? DatabaseManager.shared.viewContext.fetch(Team.fetchRequest())) ?? []
+        let teams = ((try? DatabaseManager.shared.viewContext.fetch(Team.fetchRequest())) ?? []).filter {
+            $0.account?.appleID?.caseInsensitiveCompare(email) == .orderedSame
+        }
         let records = teams.map {
             TNBTeamRecord(identifier: $0.identifier, name: $0.name, type: $0.type.localizedDescription)
         }
@@ -329,6 +331,14 @@ private struct TeamPickerView: View {
     @State private var selected: String
     @State private var manualTeamID = ""
 
+    private var resolvedTeamID: String {
+        selected.isEmpty ? manualTeamID.trimmingCharacters(in: .whitespaces).uppercased() : selected
+    }
+
+    private var canSwitch: Bool {
+        TNBAccountVault.isValidTeamIdentifier(resolvedTeamID)
+    }
+
     init(account: TNBAccountRecord, onPick: @escaping (String) -> Void) {
         self.account = account
         self.onPick = onPick
@@ -348,9 +358,14 @@ private struct TeamPickerView: View {
                         Text("这个 ID 还没有发现团队。可以从证书自动识别，也可以直接填写团队 ID（10 位，例如 68LPZ6ZK87）。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        TextField("团队 ID", text: $manualTeamID)
+                        TextField("10 位团队 ID", text: $manualTeamID)
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
+                        if !manualTeamID.isEmpty && !canSwitch {
+                            Text("请输入 10 位大写字母或数字。")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
                     }
                     ForEach(account.teams) { team in
                         HStack {
@@ -377,9 +392,9 @@ private struct TeamPickerView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     SwiftUI.Button("切换") {
                         dismiss()
-                        onPick(selected.isEmpty ? manualTeamID.trimmingCharacters(in: .whitespaces) : selected)
+                        onPick(resolvedTeamID)
                     }
-                    .disabled(selected.isEmpty && manualTeamID.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!canSwitch)
                 }
             }
         }

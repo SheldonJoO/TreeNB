@@ -33,6 +33,12 @@ struct TNBTeamRecord: Codable, Identifiable, Hashable {
     var id: String { identifier }
 }
 
+struct TNBCertificateRecord: Codable, Hashable {
+    let teamID: String
+    let p12: Data
+    let password: String?
+}
+
 struct TNBAccountRecord: Codable, Identifiable, Hashable {
     var id: UUID
     var email: String
@@ -43,6 +49,7 @@ struct TNBAccountRecord: Codable, Identifiable, Hashable {
     var xcodeToken: String?
     var certificateP12: Data?
     var certificatePassword: String?
+    var certificates: [TNBCertificateRecord]?
     var anisetteIdentifier: String?
     var anisetteAdiBlob: String?
     /// local = 手机登录；computer = 从电脑账号配置导入；p12 = 手动导入证书
@@ -55,12 +62,25 @@ struct TNBAccountRecord: Codable, Identifiable, Hashable {
     }
 
     var hasUsableCredentials: Bool {
-        (xcodeToken != nil && adsid != nil) || password != nil
+        ((xcodeToken?.isEmpty == false) && (adsid?.isEmpty == false)) || (password?.isEmpty == false)
     }
 
     var hasCertificate: Bool {
         guard let data = certificateP12 else { return false }
         return !data.isEmpty
+    }
+
+    func certificate(forTeam teamID: String?) -> (p12: Data, password: String?)? {
+        if let teamID, let certificate = certificates?.first(where: { $0.teamID == teamID }) {
+            return (certificate.p12, certificate.password)
+        }
+        if let teamID, let p12 = certificateP12,
+           let certificateTeam = TNBAccountVault.teamID(from: p12, password: certificatePassword),
+           certificateTeam == teamID {
+            return (p12, certificatePassword)
+        }
+        guard teamID == nil, let p12 = certificateP12 else { return nil }
+        return (p12, certificatePassword)
     }
 }
 
@@ -92,13 +112,51 @@ final class TNBAccountVault: ObservableObject {
             migrateFromCurrentState()
             return
         }
-        self.accounts = container.accounts
+        self.accounts = Self.deduplicated(container.accounts, preferredID: container.currentID)
         self.currentID = container.currentID ?? container.accounts.first(where: {
             $0.email.caseInsensitiveCompare(Keychain.shared.appleIDEmailAddress ?? "") == .orderedSame
         })?.id
+        if let currentID, !accounts.contains(where: { $0.id == currentID }) {
+            self.currentID = accounts.first(where: {
+                $0.email.caseInsensitiveCompare(Keychain.shared.appleIDEmailAddress ?? "") == .orderedSame
+            })?.id ?? accounts.first?.id
+        }
         if accounts.isEmpty {
             migrateFromCurrentState()
+        } else if self.accounts != container.accounts {
+            persist()
         }
+    }
+
+    private static func deduplicated(_ records: [TNBAccountRecord], preferredID: UUID?) -> [TNBAccountRecord] {
+        var result: [TNBAccountRecord] = []
+        for record in records {
+            guard let index = result.firstIndex(where: {
+                $0.email.caseInsensitiveCompare(record.email) == .orderedSame
+            }) else {
+                result.append(record)
+                continue
+            }
+            var existing = result[index]
+            if existing.id != preferredID, record.id == preferredID { existing.id = record.id }
+            if existing.password == nil { existing.password = record.password }
+            if existing.adsid == nil { existing.adsid = record.adsid }
+            if existing.xcodeToken == nil { existing.xcodeToken = record.xcodeToken }
+            if existing.certificateP12 == nil { existing.certificateP12 = record.certificateP12 }
+            if existing.certificatePassword == nil { existing.certificatePassword = record.certificatePassword }
+            if existing.anisetteIdentifier == nil { existing.anisetteIdentifier = record.anisetteIdentifier }
+            if existing.anisetteAdiBlob == nil { existing.anisetteAdiBlob = record.anisetteAdiBlob }
+            if existing.activeTeamIdentifier == nil { existing.activeTeamIdentifier = record.activeTeamIdentifier }
+            for team in record.teams where !existing.teams.contains(team) { existing.teams.append(team) }
+            var certificates = existing.certificates ?? []
+            for certificate in record.certificates ?? [] where !certificates.contains(certificate) {
+                certificates.append(certificate)
+            }
+            existing.certificates = certificates.isEmpty ? nil : certificates
+            if record.updatedAt > existing.updatedAt { existing.updatedAt = record.updatedAt }
+            result[index] = existing
+        }
+        return result
     }
 
     private func persist() {
@@ -194,7 +252,8 @@ final class TNBAccountVault: ObservableObject {
 
     /// 把当前 Keychain/证书/anisette 的瞬时状态写回当前激活记录。
     func captureCurrent() {
-        guard let email = Keychain.shared.appleIDEmailAddress, !email.isEmpty else { return }
+        let keychain = Keychain.shared
+        guard let email = keychain.appleIDEmailAddress, !email.isEmpty else { return }
         var target = record(forEmail: email)
         if target == nil {
             target = TNBAccountRecord(
@@ -207,32 +266,64 @@ final class TNBAccountVault: ObservableObject {
             accounts.append(target!)
         }
         guard let index = accounts.firstIndex(where: { $0.id == target!.id }) else { return }
-        accounts[index].password = Keychain.shared.appleIDPassword
-        accounts[index].adsid = Keychain.shared.appleIDAdsid
-        accounts[index].xcodeToken = Keychain.shared.appleIDXcodeToken
-        accounts[index].anisetteIdentifier = AnisetteConfigManager.shared.anisetteIdentifier
-        accounts[index].anisetteAdiBlob = AnisetteConfigManager.shared.anisetteAdiBlob
-        if let cert = Keychain.shared.signingCertificate {
-            accounts[index].certificateP12 = cert
-            accounts[index].certificatePassword = Keychain.shared.signingCertificatePassword
+        if let password = keychain.appleIDPassword { accounts[index].password = password }
+        if let adsid = keychain.appleIDAdsid { accounts[index].adsid = adsid }
+        if let token = keychain.appleIDXcodeToken { accounts[index].xcodeToken = token }
+        if let identifier = AnisetteConfigManager.shared.anisetteIdentifier {
+            accounts[index].anisetteIdentifier = identifier
         }
-        let activeTeamID = (try? DatabaseManager.shared.viewContext.fetch(Team.fetchRequest()))
-            .flatMap { $0.first { $0.isActiveTeam } }?.identifier
-        if let activeTeamID { accounts[index].activeTeamIdentifier = activeTeamID }
+        if let blob = AnisetteConfigManager.shared.anisetteAdiBlob {
+            accounts[index].anisetteAdiBlob = blob
+        }
+        let teams = (try? DatabaseManager.shared.viewContext.fetch(Team.fetchRequest())) ?? []
+        let accountTeams = teams.filter { $0.account?.appleID?.caseInsensitiveCompare(email) == .orderedSame }
+        if let cert = keychain.signingCertificate {
+            let certificateTeam = Self.teamID(from: cert, password: keychain.signingCertificatePassword)
+            let belongsToAccount = certificateTeam == nil
+                ? !accounts[index].teams.isEmpty
+                : accountTeams.contains(where: { $0.identifier == certificateTeam })
+                    || accounts[index].teams.contains(where: { $0.identifier == certificateTeam })
+            if belongsToAccount {
+                storeCertificate(cert, password: keychain.signingCertificatePassword, at: &accounts[index])
+            }
+        }
+        for team in accountTeams {
+            let record = TNBTeamRecord(identifier: team.identifier, name: team.name,
+                                       type: team.type.localizedDescription)
+            if !accounts[index].teams.contains(record) { accounts[index].teams.append(record) }
+        }
+        if let activeTeamID = accountTeams.first(where: { $0.isActiveTeam })?.identifier {
+            accounts[index].activeTeamIdentifier = activeTeamID
+        }
         accounts[index].updatedAt = Date()
         currentID = accounts[index].id
         persist()
     }
 
-    /// 登录新 Apple ID 完成后调用：把当前会话收编成一条新记录。
+    /// 登录新 Apple ID 完成后调用；同一 Apple ID 更新原记录，不制造重复账号。
     func captureCurrentAsNewAccount(source: String = "local") {
         captureCurrent()
-        guard let active = activeAccount else { return }
-        guard let index = accounts.firstIndex(where: { $0.id == active.id }) else { return }
+        guard let email = Keychain.shared.appleIDEmailAddress,
+              let index = accounts.firstIndex(where: {
+                  $0.email.caseInsensitiveCompare(email) == .orderedSame
+              }) else { return }
         accounts[index].source = source
-        accounts[index].id = UUID() // 新记录，避免与原 id 合并
         currentID = accounts[index].id
         persist()
+    }
+
+    private func storeCertificate(_ p12: Data, password: String?, at record: inout TNBAccountRecord) {
+        guard !p12.isEmpty else { return }
+        if let teamID = Self.teamID(from: p12, password: password) {
+            var certificates = record.certificates ?? []
+            certificates.removeAll { $0.teamID == teamID }
+            certificates.append(TNBCertificateRecord(teamID: teamID, p12: p12, password: password))
+            record.certificates = certificates
+        }
+        if record.certificateP12 == nil {
+            record.certificateP12 = p12
+            record.certificatePassword = password
+        }
     }
 
     // MARK: 切换：整包凭据回写 + 团队标记 + 证书激活
@@ -243,10 +334,47 @@ final class TNBAccountVault: ObservableObject {
         guard let index = accounts.firstIndex(where: { $0.id == accountID }) else {
             throw TNVaultError.accountNotFound
         }
-        let record = accounts[index]
-        let targetTeamID = teamIdentifier ?? record.activeTeam?.identifier ?? record.teams.first?.identifier
+        var record = accounts[index]
+        guard record.hasUsableCredentials else { throw TNVaultError.missingCredentials }
+        let requestedTeam = teamIdentifier ?? record.activeTeamIdentifier
+        if let requestedTeam {
+            guard Self.isValidTeamIdentifier(requestedTeam) else { throw TNVaultError.invalidTeam }
+            if !record.teams.contains(where: { $0.identifier == requestedTeam }) {
+                let team = TNBTeamRecord(identifier: requestedTeam, name: "手动添加的团队", type: "开发者团队")
+                record.teams.append(team)
+            }
+        }
+        let targetTeamID = requestedTeam ?? record.teams.first?.identifier
+        if let targetTeamID { try ensureTeamRecord(email: record.email, teamID: targetTeamID) }
 
-        // 1) Keychain 凭据整包回写（这就是不再重登的关键）
+        var storedCertificate = record.certificate(forTeam: targetTeamID)
+        if storedCertificate == nil, let teamID = targetTeamID {
+            storedCertificate = cachedCertificate(for: teamID)
+        }
+        let certificate = try storedCertificate.map {
+            try CertificateManager.parse($0.p12, password: $0.password)
+        }
+        let manager = CertificateManager.shared
+        let previousCertificate = manager.activeCertificate?.certificate
+        let context = DatabaseManager.shared.viewContext
+        let previousTeamID = ((try? context.fetch(Team.fetchRequest())) ?? [])
+            .first(where: { $0.isActiveTeam })?.identifier
+
+        do {
+            try manager.setActiveCertificate(certificate)
+            if let teamID = targetTeamID {
+                try await AuthManager.shared.switchActiveTeam(to: teamID)
+            } else {
+                await AuthManager.shared.signOut(keepCertificate: true, keepAnisetteData: true)
+            }
+        } catch {
+            if let previousTeamID {
+                try? await AuthManager.shared.switchActiveTeam(to: previousTeamID)
+            }
+            try? manager.setActiveCertificate(previousCertificate)
+            throw error
+        }
+
         let keychain = Keychain.shared
         keychain.appleIDEmailAddress = record.email
         keychain.appleIDPassword = record.password
@@ -254,51 +382,32 @@ final class TNBAccountVault: ObservableObject {
         keychain.appleIDXcodeToken = record.xcodeToken
         AnisetteConfigManager.shared.anisetteIdentifier = record.anisetteIdentifier
         AnisetteConfigManager.shared.anisetteAdiBlob = record.anisetteAdiBlob
+        AnisetteDataManager.shared.clearCache()
 
-        // 2) 证书：优先用本 id 保存的 p12；没有就从本地证书缓存按 team 找
-        var certificateActivated = false
-        if let p12 = record.certificateP12, !p12.isEmpty,
-           let cert = try? CertificateManager.parse(p12, password: record.certificatePassword) {
-            try? CertificateManager.shared.setActiveCertificate(cert)
-            certificateActivated = true
-        } else if let teamID = targetTeamID {
-            certificateActivated = activateCachedCertificate(for: teamID)
+        guard let updatedIndex = accounts.firstIndex(where: { $0.id == accountID }) else {
+            throw TNVaultError.accountNotFound
         }
-        if !certificateActivated {
-            debugLog("[TreeNB][Vault] no local certificate for \(record.email); signing will provision one")
+        accounts[updatedIndex] = record
+        if let storedCertificate {
+            storeCertificate(storedCertificate.p12, password: storedCertificate.password, at: &accounts[updatedIndex])
         }
-
-        // 3) 数据库只负责激活团队标记；凭据已经由第 1 步对齐。
-        //    电脑导入的 id 在手机上可能还没有团队记录 → 先补建再切。
-        if let teamID = targetTeamID {
-            ensureTeamRecord(email: record.email, teamID: teamID)
-            do {
-                try await AuthManager.shared.switchActiveTeam(to: teamID)
-            } catch {
-                ensureTeamRecord(email: record.email, teamID: teamID)
-                do {
-                    try await AuthManager.shared.switchActiveTeam(to: teamID)
-                } catch {
-                    // 凭据与证书已经写回；团队标记失败不阻断切换，
-                    // 后续签名会提示用该 id 登录一次以补全团队信息。
-                    debugLog("[TreeNB][Vault] team activation deferred: \(error)")
-                }
-            }
-        } else {
-            await AuthManager.shared.signOut(keepCertificate: true, keepAnisetteData: true)
-        }
-
-        accounts[index].activeTeamIdentifier = targetTeamID
-        accounts[index].updatedAt = Date()
-        currentID = record.id
+        accounts[updatedIndex].activeTeamIdentifier = targetTeamID
+        accounts[updatedIndex].updatedAt = Date()
+        currentID = accountID
         persist()
-        debugLog("[TreeNB][Vault] activated \(record.email) team=\(targetTeamID ?? "none") cert=\(certificateActivated)")
+        debugLog("[TreeNB][Vault] activated \(record.email) team=\(targetTeamID ?? "none") cert=\(certificate != nil)")
+    }
+
+    nonisolated static func isValidTeamIdentifier(_ value: String) -> Bool {
+        value.count == 10 && value.utf8.allSatisfy {
+            ($0 >= 65 && $0 <= 90) || ($0 >= 48 && $0 <= 57)
+        }
     }
 
     /// 从 p12 里读出 OU=TEAMID，并补建 CoreData 团队记录。
     /// 电脑导过来的账号在手机上往往只有证书、没有开发者团队记录，
     /// 不补这一步 switchActiveTeam 会报 “No stored team with identifier”。
-    private static func teamID(from p12: Data, password: String?) -> String? {
+    nonisolated static func teamID(from p12: Data, password: String?) -> String? {
         guard let cert = try? CertificateManager.parse(p12, password: password),
               let der = cert.data else { return nil }
         let text = String(decoding: der, as: UTF8.self)
@@ -308,7 +417,7 @@ final class TNBAccountVault: ObservableObject {
         return String(text[range])
     }
 
-    private func ensureTeamRecord(email: String, teamID: String) {
+    private func ensureTeamRecord(email: String, teamID: String) throws {
         let context = DatabaseManager.shared.viewContext
 
         let accountRequest = Account.fetchRequest()
@@ -329,7 +438,14 @@ final class TNBAccountVault: ObservableObject {
 
         let teamRequest = Team.fetchRequest()
         teamRequest.predicate = NSPredicate(format: "%K == %@", #keyPath(Team.identifier), teamID)
-        if (try? context.fetch(teamRequest))?.first != nil { return }
+        let existingTeam = (try? context.fetch(teamRequest))?.first
+        if let existingTeam {
+            if existingTeam.account !== account {
+                existingTeam.setValue(account, forKey: "account")
+                try context.save()
+            }
+            return
+        }
         guard let entity = NSEntityDescription.entity(forEntityName: "Team", in: context) else { return }
         let team = NSManagedObject(entity: entity, insertInto: context)
         team.setValue(teamID, forKey: "identifier")
@@ -337,12 +453,14 @@ final class TNBAccountVault: ObservableObject {
         team.setValue(NSNumber(value: 0), forKey: "typeValue")
         team.setValue(false, forKey: "isActiveTeam")
         team.setValue(account, forKey: "account")
-        try? context.save()
+        do { try context.save() } catch {
+            debugLog("[TreeNB][Vault] failed to save team \(teamID): \(error)")
+            throw error
+        }
     }
 
-    /// 从本地证书缓存里找属于该 team 的证书并激活。
-    @discardableResult
-    private func activateCachedCertificate(for teamIdentifier: String) -> Bool {
+    /// 从本地证书缓存里找属于该 team 的证书，供旧版本已切换但未归档的记录恢复。
+    private func cachedCertificate(for teamIdentifier: String) -> (p12: Data, password: String?)? {
         let manager = CertificateManager.shared
         let needle = Data(teamIdentifier.utf8)
         var candidates = manager.getAllLocalCertificates()
@@ -351,11 +469,10 @@ final class TNBAccountVault: ObservableObject {
             guard let der = cert.data, der.range(of: needle) != nil else { continue }
             let password = manager.getPassword(for: cert)
             guard let data = try? CertificateManager.convert(cert, password: password),
-                  let parsed = try? CertificateManager.parse(data, password: password) else { continue }
-            try? manager.setActiveCertificate(parsed)
-            return true
+                  Self.teamID(from: data, password: password) == teamIdentifier else { continue }
+            return (data, password)
         }
-        return false
+        return nil
     }
 
     // MARK: 导入 / 导出（电脑 ↔ 手机双向）
@@ -380,17 +497,20 @@ final class TNBAccountVault: ObservableObject {
         guard let index = accounts.firstIndex(where: { $0.id == record!.id }) else {
             throw TNVaultError.accountNotFound
         }
-        accounts[index].password = imported.password
-        accounts[index].certificateP12 = imported.certificateData
-        accounts[index].certificatePassword = imported.certificatePassword
-        accounts[index].anisetteIdentifier = imported.anisetteIdentifier
-        accounts[index].anisetteAdiBlob = imported.anisetteAdiBlob
+        if let password = imported.password { accounts[index].password = password }
+        storeCertificate(imported.certificateData, password: imported.certificatePassword, at: &accounts[index])
+        if !imported.anisetteIdentifier.isEmpty {
+            accounts[index].anisetteIdentifier = imported.anisetteIdentifier
+        }
+        if !imported.anisetteAdiBlob.isEmpty {
+            accounts[index].anisetteAdiBlob = imported.anisetteAdiBlob
+        }
         accounts[index].source = "computer"
         accounts[index].updatedAt = Date()
         if let tid = Self.teamID(from: imported.certificateData, password: imported.certificatePassword) {
             let team = TNBTeamRecord(identifier: tid, name: "TreeNB 导入的团队", type: "电脑证书")
             if !accounts[index].teams.contains(team) { accounts[index].teams.append(team) }
-            ensureTeamRecord(email: imported.email, teamID: tid)
+            try ensureTeamRecord(email: imported.email, teamID: tid)
         }
         persist()
         debugLog("[TreeNB][Vault] imported computer account: \(imported.email)")
@@ -400,30 +520,18 @@ final class TNBAccountVault: ObservableObject {
     /// 把某个保存的 id 导出成加密账号配置，方便带回电脑继续用。
     func exportAccountBackup(accountID: UUID, filePassword: String) throws -> Data {
         guard let record = accounts.first(where: { $0.id == accountID }),
-              let p12 = record.certificateP12 else {
+              let certificate = record.certificate(forTeam: record.activeTeamIdentifier) else {
             throw TNVaultError.missingCertificate
         }
-        let imported: ImportedAccount
-        if let certPass = record.certificatePassword {
-            imported = ImportedAccount(
-                version: ImportedAccount.currentVersion,
-                email: record.email,
-                password: record.password,
-                certificateData: p12,
-                certificatePassword: certPass,
-                anisetteIdentifier: record.anisetteIdentifier ?? "",
-                anisetteAdiBlob: record.anisetteAdiBlob ?? ""
-            )
-        } else {
-            imported = ImportedAccount(
-                version: ImportedAccount.currentVersion,
-                email: record.email,
-                password: record.password,
-                certificateData: p12,
-                anisetteIdentifier: record.anisetteIdentifier ?? "",
-                anisetteAdiBlob: record.anisetteAdiBlob ?? ""
-            )
-        }
+        let imported = ImportedAccount(
+            version: ImportedAccount.currentVersion,
+            email: record.email,
+            password: record.password,
+            certificateData: certificate.p12,
+            certificatePassword: certificate.password,
+            anisetteIdentifier: record.anisetteIdentifier ?? "",
+            anisetteAdiBlob: record.anisetteAdiBlob ?? ""
+        )
         return try ImportExport.encryptAccount(imported, filePassword: filePassword)
     }
 
@@ -433,21 +541,30 @@ final class TNBAccountVault: ObservableObject {
             throw TNVaultError.accountNotFound
         }
         _ = try CertificateManager.parse(p12, password: password)
-        accounts[index].certificateP12 = p12
-        accounts[index].certificatePassword = password
-        accounts[index].updatedAt = Date()
+        var record = accounts[index]
+        storeCertificate(p12, password: password, at: &record)
+        if let teamID = Self.teamID(from: p12, password: password) {
+            let team = TNBTeamRecord(identifier: teamID, name: "证书中的开发者团队", type: "证书识别")
+            if !record.teams.contains(team) { record.teams.append(team) }
+            if record.activeTeamIdentifier == nil { record.activeTeamIdentifier = teamID }
+            try ensureTeamRecord(email: record.email, teamID: teamID)
+        }
+        record.updatedAt = Date()
+        accounts[index] = record
         persist()
     }
 
-    func remove(accountID: UUID) {
+    func remove(accountID: UUID) async throws {
+        guard accounts.contains(where: { $0.id == accountID }) else { return }
+        let wasActive = currentID == accountID
+        let nextAccount = accounts.first { $0.id != accountID }
         accounts.removeAll { $0.id == accountID }
-        if currentID == accountID {
-            currentID = accounts.first?.id
-            if let email = activeAccount?.email {
-                Keychain.shared.appleIDEmailAddress = email
-            }
-        }
+        if wasActive { currentID = nextAccount?.id }
         persist()
+        if wasActive {
+            await AuthManager.shared.signOut(keepCertificate: true, keepAnisetteData: true)
+            if let nextAccount { try await activate(accountID: nextAccount.id, teamIdentifier: nextAccount.activeTeamIdentifier) }
+        }
     }
 
     /// 团队列表由调用方在成功登录后刷新（Developer Portal 返回的 teams）。
@@ -468,12 +585,16 @@ final class TNBAccountVault: ObservableObject {
 enum TNVaultError: LocalizedError {
     case accountNotFound
     case missingCertificate
+    case missingCredentials
+    case invalidTeam
     case invalidBackup
 
     var errorDescription: String? {
         switch self {
         case .accountNotFound: return "找不到这个 Apple ID 的保存记录。"
         case .missingCertificate: return "这个 Apple ID 还没有保存签名证书。请先登录或导入 p12。"
+        case .missingCredentials: return "这个 Apple ID 还没有保存登录凭据。请先登录一次，之后切换无需重新登录。"
+        case .invalidTeam: return "团队 ID 应为 10 位大写字母或数字。"
         case .invalidBackup: return "账号配置文件格式不对或密码错误。"
         }
     }
