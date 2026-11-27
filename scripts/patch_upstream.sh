@@ -1108,73 +1108,12 @@ PY
 fi
 
 
-# B1g5a. 主界面强制全屏（修「界面缩进圆角卡片、上下大黑边」）。
-#   真机证据（截图 2026-11-27）：状态栏在最顶正常、内容左右占满、上下各约 1/6 纯黑、
-#   内容顶部圆角、垂直居中 —— 即 root view 高度只有约 68% 且被居中，不是 pageSheet
-#   （pageSheet 左右也会有边距）。根因：主 window / rootViewController.view 尺寸非全屏。
-#   上一版失败原因：注入点 willConnectTo 时 storyboard 的 window 尚未创建（nil），
-#   helper guard let window else { return } 直接返回，修复从未真正执行。
-#   本次修复：改到 sceneDidBecomeActive（window 已存在），遍历 scene.windows 找含
-#   rootViewController 的那个 window，强制 window.frame 与 root view.frame 都为 screen.bounds，
-#   并在下一个 runloop 再兜底一次（覆盖 storyboard 交接后的重布局）。
-if [ -f "$SCENEDELEGATE" ]; then
-  python3 - "$SCENEDELEGATE" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-
-# helper：强制所有属于该 scene 的 window + 其 root view 铺满屏幕。
-helper = '''
-    // TreeNB: 主界面强制全屏 —— 修主 window/root view 非全屏导致上下大黑边、内容缩成圆角卡片。
-    // 注入在 sceneDidBecomeActive：此时 storyboard 的 window 一定已创建（willConnectTo 时为 nil）。
-    private func tnbForceFullScreen(scene: UIWindowScene) {
-        let apply = {
-            let full = scene.screen.bounds
-            for window in scene.windows {
-                if window.frame != full {
-                    window.frame = full
-                }
-                if let root = window.rootViewController, root.view.frame != full {
-                    root.view.frame = full
-                    root.view.setNeedsLayout()
-                }
-            }
-        }
-        apply()
-        // storyboard 交接 / 首次 layout 后可能重排，下一帧再兜底一次。
-        DispatchQueue.main.async(execute: apply)
-    }
-'''
-
-# 在 class 声明后插入 helper（幂等）。
-for cls in ('final class SceneDelegate: UIResponder, UIWindowSceneDelegate\n{\n',
-            'class SceneDelegate: NSObject, UIWindowSceneDelegate {\n'):
-    if cls in s and 'private func tnbForceFullScreen' not in s:
-        s = s.replace(cls, cls + helper, 1)
-        break
-
-# 在 sceneDidBecomeActive 内调用：锚点用 debugLog 行（该方法唯一）。
-anchor_active = '''        debugLog("[SceneDelegate] sceneDidBecomeActive() invoked")
-'''
-inject_active = '''        debugLog("[SceneDelegate] sceneDidBecomeActive() invoked")
-
-        // TreeNB: 主界面强制全屏，修上下大黑边（window 此时已存在）。
-        if let windowScene = (scene as? UIWindowScene) {
-            tnbForceFullScreen(scene: windowScene)
-        }
-'''
-if anchor_active in s and 'tnbForceFullScreen(scene:' not in s:
-    s = s.replace(anchor_active, inject_active, 1)
-
-open(p, 'w', encoding='utf-8').write(s)
-print('  SceneDelegate.swift: 主界面强制全屏 helper（sceneDidBecomeActive）已注入')
-PY
-  grep -q 'private func tnbForceFullScreen' "$SCENEDELEGATE" \
-    || { echo "FATAL[B1g5a]: 全屏 helper 方法体未注入" >&2; exit 2; }
-  grep -q 'tnbForceFullScreen(scene:' "$SCENEDELEGATE" \
-    || { echo "FATAL[B1g5a]: 全屏 helper 调用点未注入" >&2; exit 2; }
-  ok "主界面黑边修复：sceneDidBecomeActive 强制全屏已注入"
-fi
+# B1g5a（已移除，2026-11-27 11:44）。
+#   真机对照：0419 包（本段尚未引入）完全全屏，0828 起每次都会上下各 15.5% 黑边。
+#   历史补丁 tnbForceFullScreen 把 SceneDelegate 所有 window/root view 的 frame
+#   强行写成 scene.screen.bounds，正是把界面框进非全屏尺寸的可疑来源。
+#   整合版恢复 0419 行为：不再注入任何 window/root frame 强制代码。
+#   （保留 B1j 防闪退、B1k 跳过引导页、玻璃 v3。）
 
 # B1g5. 闪屏治标：SceneDelegate.sceneWillEnterForeground 在最早时机盖【统一品牌启动画面】，
 #       等 reconcileInstalledApps 完成后淡出。遮罩不再是快照，内容与底层重建无关，
@@ -1766,16 +1705,17 @@ else
 fi
 
 
-# B1k. 覆盖更新后卡在引导页进不去 + Welcome openSSS + 上下黑边（2026-11-27 真机 0158 反馈）。
+# B1k. 覆盖更新后进不去 + Welcome openSSS（2026-11-27 真机 0158 反馈）。
 # ---------------------------------------------------------------------------
 # 真机证据：用旧 TreeNB 直接覆盖更新后，进来是 OnboardingView 引导页（Welcome to openSSS），
-#   上下各 15.5% 对称黑边（window/root 高度仅约 69%），底部 Get Started 按钮被裁出屏幕 → 点不动。
+#   底部 Get Started 按钮被裁出屏幕 → 点不动。
 # 根因：①覆盖安装后 hasCompletedOnboarding 丢失 → 弹引导页；
-#   ②OnboardingView.swift 的 NSLocalizedString key 从未被品牌补丁覆盖（只改了 .strings value）；
-#   ③黑边是系统/容器窗口尺寸，app 内 SceneDelegate 的 tnbForceFullScreen 改不到该页面。
+#   ②OnboardingView.swift 的 NSLocalizedString key 从未被品牌补丁覆盖（只改了 .strings value）。
 # 修法：①启动跳过引导页（默认已完成），直接进主界面 —— 用户立即可用；
-#   ②OnboardingView.swift 全部 openSSS key → 🌲TreeNB（设置里重播引导也正确）；
-#   ③LaunchViewController.viewDidAppear 加 root view 全屏兜底（下一帧再兜一次）。
+#   ②OnboardingView.swift 全部 openSSS key → 🌲TreeNB（设置里重播引导也正确）。
+# 注意：原 B1k 的 ③「root view / window.frame 全屏兜底」已移除。
+#   真机对照证明 0419（无任何 frame 强制）才全屏，0828 起加了 frame 强制反而上下黑边。
+#   本整合版恢复 0419 窗口行为，不注入任何 window/root frame 代码。
 LOGVC="$SSS/AltStore/LaunchViewController.swift"
 ONBOARD="$SSS/SideStore/Views/Onboarding/OnboardingView.swift"
 
@@ -1797,30 +1737,7 @@ print('  LaunchViewController.swift: 引导页已跳过（B1k）')
 PY2
   grep -q 'TreeNB\[B1k\]' "$LOGVC" || { echo "FATAL[B1k]: 跳过引导页未注入" >&2; exit 10; }
 
-  # ③ 全屏兜底：viewDidAppear 里 super 之后强制 self.view + keyWindow 全屏。
-  python3 - "$LOGVC" <<'PY3'
-import sys
-p=sys.argv[1]; s=open(p,encoding='utf-8').read()
-anchor=("        debugLog(\"LaunchViewController.viewDidAppear() invoked\")\n"
-        "        super.viewDidAppear(animated)\n")
-inject=("        debugLog(\"[LaunchViewController] viewDidAppear() invoked\")\n"
-        "        super.viewDidAppear(animated)\n"
-        "\n"
-        "        // TreeNB[B1k] fullscreen: 覆盖更新/冷启动后 root view 可能被系统缩成 69% 高居中（上下黑边）。\n"
-        "        // 在主界面出现前后各强制一次铺满屏幕。\n"
-        "        self.view.frame = UIScreen.main.bounds\n"
-        "        if let win = self.view.window { win.frame = UIScreen.main.bounds }\n"
-        "        DispatchQueue.main.async { [weak self] in\n"
-        "            self?.view.frame = UIScreen.main.bounds\n"
-        "            self?.view.window?.frame = UIScreen.main.bounds\n"
-        "        }\n")
-if anchor in s and 'TreeNB[B1k] fullscreen' not in s:
-    s=s.replace(anchor,inject,1)
-    open(p,'w',encoding='utf-8').write(s)
-    print('  LaunchViewController.swift: 全屏兜底已注入（B1k）')
-PY3
-  grep -q 'TreeNB\[B1k\] fullscreen' "$LOGVC" || { echo "FATAL[B1k]: 全屏兜底未注入" >&2; exit 13; }
-  ok "B1k: 跳过引导页 + 全屏兜底已注入 LaunchViewController"
+  ok "B1k: 跳过引导页已注入 LaunchViewController（窗口恢复 0419 全屏基线，不注入 frame 强制）"
 else
   echo "FATAL[B1k]: 缺少 $LOGVC" >&2; exit 11
 fi
