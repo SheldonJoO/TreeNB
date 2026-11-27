@@ -1765,4 +1765,91 @@ else
   exit 8
 fi
 
+
+# B1k. 覆盖更新后卡在引导页进不去 + Welcome openSSS + 上下黑边（2026-11-27 真机 0158 反馈）。
+# ---------------------------------------------------------------------------
+# 真机证据：用旧 TreeNB 直接覆盖更新后，进来是 OnboardingView 引导页（Welcome to openSSS），
+#   上下各 15.5% 对称黑边（window/root 高度仅约 69%），底部 Get Started 按钮被裁出屏幕 → 点不动。
+# 根因：①覆盖安装后 hasCompletedOnboarding 丢失 → 弹引导页；
+#   ②OnboardingView.swift 的 NSLocalizedString key 从未被品牌补丁覆盖（只改了 .strings value）；
+#   ③黑边是系统/容器窗口尺寸，app 内 SceneDelegate 的 tnbForceFullScreen 改不到该页面。
+# 修法：①启动跳过引导页（默认已完成），直接进主界面 —— 用户立即可用；
+#   ②OnboardingView.swift 全部 openSSS key → 🌲TreeNB（设置里重播引导也正确）；
+#   ③LaunchViewController.viewDidAppear 加 root view 全屏兜底（下一帧再兜一次）。
+LOGVC="$SSS/AltStore/LaunchViewController.swift"
+ONBOARD="$SSS/SideStore/Views/Onboarding/OnboardingView.swift"
+
+# ① 跳过引导页：把 `if !hasCompletedOnboarding` 改为恒假，覆盖安装后直接进主界面。
+if [ -f "$LOGVC" ]; then
+  python3 - "$LOGVC" <<'PY2'
+import sys
+p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+old='        if !UserDefaults.standard.hasCompletedOnboarding {'
+new=("        // TreeNB[B1k]: 覆盖更新后 hasCompletedOnboarding 会丢失，且引导页在低高度窗口下\n"
+     "        // 底部 Get Started 被裁切而无法点击 → 直接跳过引导，进主界面。\n"
+     "        if false && !UserDefaults.standard.hasCompletedOnboarding {")
+if old in s and 'TreeNB[B1k]' not in s:
+    s=s.replace(old,new,1)
+elif old not in s and 'TreeNB[B1k]' not in s:
+    sys.stderr.write('FATAL[B1k]: LaunchViewController 引导页判断锚点未找到\n'); sys.exit(9)
+open(p,'w',encoding='utf-8').write(s)
+print('  LaunchViewController.swift: 引导页已跳过（B1k）')
+PY2
+  grep -q 'TreeNB\[B1k\]' "$LOGVC" || { echo "FATAL[B1k]: 跳过引导页未注入" >&2; exit 10; }
+
+  # ③ 全屏兜底：viewDidAppear 里 super 之后强制 self.view + keyWindow 全屏。
+  python3 - "$LOGVC" <<'PY3'
+import sys
+p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+anchor=("        debugLog(\"LaunchViewController.viewDidAppear() invoked\")\n"
+        "        super.viewDidAppear(animated)\n")
+inject=("        debugLog(\"[LaunchViewController] viewDidAppear() invoked\")\n"
+        "        super.viewDidAppear(animated)\n"
+        "\n"
+        "        // TreeNB[B1k] fullscreen: 覆盖更新/冷启动后 root view 可能被系统缩成 69% 高居中（上下黑边）。\n"
+        "        // 在主界面出现前后各强制一次铺满屏幕。\n"
+        "        self.view.frame = UIScreen.main.bounds\n"
+        "        if let win = self.view.window { win.frame = UIScreen.main.bounds }\n"
+        "        DispatchQueue.main.async { [weak self] in\n"
+        "            self?.view.frame = UIScreen.main.bounds\n"
+        "            self?.view.window?.frame = UIScreen.main.bounds\n"
+        "        }\n")
+if anchor in s and 'TreeNB[B1k] fullscreen' not in s:
+    s=s.replace(anchor,inject,1)
+    open(p,'w',encoding='utf-8').write(s)
+    print('  LaunchViewController.swift: 全屏兜底已注入（B1k）')
+PY3
+  grep -q 'TreeNB\[B1k\] fullscreen' "$LOGVC" || { echo "FATAL[B1k]: 全屏兜底未注入" >&2; exit 13; }
+  ok "B1k: 跳过引导页 + 全屏兜底已注入 LaunchViewController"
+else
+  echo "FATAL[B1k]: 缺少 $LOGVC" >&2; exit 11
+fi
+
+# ② OnboardingView.swift 文案归一（key 本身必须改，改 .strings value 无效）。
+if [ -f "$ONBOARD" ]; then
+  python3 - "$ONBOARD" <<'PY4'
+import sys
+p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+reps=[
+ ('Welcome to openSSS','Welcome to 🌲TreeNB'),
+ ('connects openSSS to','connects 🌲TreeNB to'),
+ ('openSSS uses a pairing file','🌲TreeNB uses a pairing file'),
+ ('openSSS communicates with','🌲TreeNB communicates with'),
+ ('openSSS requires an Apple ID','🌲TreeNB requires an Apple ID'),
+ ('openSSS setup is complete','🌲TreeNB setup is complete'),
+ ('You can enter openSSS,','You can enter 🌲TreeNB,'),
+ ('Open openSSS','Open 🌲TreeNB'),
+]
+for a,b in reps: s=s.replace(a,b)
+open(p,'w',encoding='utf-8').write(s)
+print('  OnboardingView.swift: 8 处 openSSS → 🌲TreeNB（B1k）')
+PY4
+  if grep -q 'openSSS' "$ONBOARD"; then
+    echo "FATAL[B1k]: OnboardingView.swift 仍残留 openSSS" >&2; exit 12
+  fi
+  ok "B1k: OnboardingView 文案已全部归一"
+else
+  warn "B1k: 未找到 $ONBOARD，跳过文案归一"
+fi
+
 log "✅ 全部补丁执行完毕。下一步：xcodegen generate && 真机 Spike（docs/启动链改造设计.md §5）"
