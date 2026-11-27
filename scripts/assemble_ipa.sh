@@ -580,6 +580,27 @@ if ! echo "$BUILD_VER" | grep -Eq '^[0-9]{12}$'; then
 fi
 echo "  全 App 玻璃 + 时间戳版本号校验通过（${SHORT_VER} / ${BUILD_VER}）"
 
+# ★ B1w 硬校验：多 Apple ID 保险库必须完整进包（新源码 + 三处注入）
+VAULT_SRC="Sources/Container/TNBAccountVault.swift"
+VAULT_VIEW="Sources/Container/TNAccountVaultView.swift"
+[ -f "$VAULT_SRC" ] && [ -f "$VAULT_VIEW" ] || {
+  echo "致命错误: 多 Apple ID 保险库源码缺失。" >&2; exit 1
+}
+grep -q 'showAccountVault' "$ROOT_VIEW" || {
+  echo "致命错误: 顶栏二级菜单缺少 Apple ID 保险库入口。" >&2; exit 1
+}
+for f in upstream/openSSS/AltStore/Core/Components/Keychain.swift \
+         upstream/openSSS/SideStore/Utils/importexport/ImportExport.swift \
+         upstream/openSSS/AltStore/Shell/AppleIDsViewController.swift; do
+  grep -q 'TreeNB\[B1w\]' "$f" || {
+    echo "致命错误: 多账号保险库补丁未注入 $f。" >&2; exit 1
+  }
+done
+grep -q 'TreeNB\[B1x\]' "upstream/openSSS/AltStore/Authentication/ResignAltStoreViewController.swift" || {
+  echo "致命错误: 重签安装终止提示未中文化（B1x）。" >&2; exit 1
+}
+echo "  多 Apple ID 保险库（B1w）与安装提示（B1x）校验通过"
+
 # ★ B1j 硬校验（2026-11-27 闪退根因）：启动期强制设备往返必须已移除，
 # 否则 LocalDevVPN 开着时 fetchUDID(forceLive:true) 触发 minimuxer FFI
 # strlen(NULL) → SIGSEGV（真机 .ips 09:05 已确认）。

@@ -19,6 +19,7 @@ struct ContainerRootView: View {
     @State private var showImporter = false
     @State private var showWidgetSettings = false
     @State private var showCertificate = false
+    @State private var showAccountVault = false
     @State private var showImportMenu = false
     @State private var showAPK = false
     @State private var showBootstrap = false
@@ -82,6 +83,11 @@ struct ContainerRootView: View {
                         } label: {
                             Label("无 JIT 证书设置", systemImage: "key.fill")
                         }
+                        SwiftUI.Button {
+                            showAccountVault = true
+                        } label: {
+                            Label("Apple ID 证书", systemImage: "person.2.badge.key.fill")
+                        }
                         Divider()
                         SwiftUI.Button {
                             showImportMenu = true
@@ -118,6 +124,16 @@ struct ContainerRootView: View {
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 SwiftUI.Button("完成") { showCertificate = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $showAccountVault) {
+                AdaptiveNavigation {
+                    TNAccountVaultView()
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                SwiftUI.Button("完成") { showAccountVault = false }
                             }
                         }
                 }

@@ -1942,6 +1942,174 @@ else
   exit 2
 fi
 
+# B1w. 多 Apple ID 保险库：凭据/团队/证书独立持久化，切换即激活（不重登）
+# ---------------------------------------------------------------------------
+# 用户侧需求：TreeNB 固定保存多 Apple ID；电脑侧载用过的 id 证书带过来继续用；
+# 手机可换另一个 id；切换时团队可选；两条路并存互不吊销。
+# 上游缺陷：Keychain 只存一份凭据，AuthManager.switchActiveTeam() 只翻数据库标记，
+# 所以切到别的 id 时凭据不匹配 → 被迫重新登录（用户截图里的痛点）。
+# 修法：Keychain 增加 vault 存储；ImportExport 增加纯解密/加密接口；
+# AppleIDsViewController 的“切换到此 Apple ID”优先走 vault 激活。
+KEYCHAIN_FILE="$SSS/AltStore/Core/Components/Keychain.swift"
+IMPEXPORT_FILE="$SSS/SideStore/Utils/importexport/ImportExport.swift"
+APPLE_IDS_FILE="$SSS/AltStore/Shell/AppleIDsViewController.swift"
+
+python3 - "$KEYCHAIN_FILE" "$IMPEXPORT_FILE" "$APPLE_IDS_FILE" <<'PYB1W'
+import sys
+kc_path, ie_path, ai_path = sys.argv[1:]
+
+# 1) Keychain: 保险库数据项
+s = open(kc_path, encoding='utf-8').read()
+if 'TreeNB[B1w]' not in s:
+    anchor = '    @KeychainItem(key: "deviceUDID")\n    public var deviceUDID: String?\n'
+    if anchor not in s:
+        raise SystemExit('FATAL[B1w]: Keychain deviceUDID 锚点缺失')
+    injection = '''
+    // TreeNB[B1w]: 多 Apple ID 保险库（每个 id 的账号/证书/团队/anisette 独立保存）
+    @KeychainItem(key: "tnbAccountVaultV1")
+    public var tnbAccountVaultData: Data?
+'''
+    s = s.replace(anchor, anchor + injection, 1)
+    open(kc_path, 'w', encoding='utf-8').write(s)
+    print('  B1w patched: Keychain.swift (account vault item)')
+
+# 2) ImportExport: 纯解密/纯加密，供保险库导入导出而不覆盖当前账号
+s = open(ie_path, encoding='utf-8').read()
+if 'TreeNB[B1w]' not in s:
+    anchor = '    public static func importAccount(_ encryptedData: Data, filePassword: String) async throws -> ImportedAccount {\n'
+    if anchor not in s:
+        raise SystemExit('FATAL[B1w]: ImportExport.importAccount 锚点缺失')
+    helpers = r'''    // TreeNB[B1w]: 只解密账号配置，不 signOut / 不覆盖当前激活账号。
+    // 保险库用它把电脑侧的 id 收编为一条记录，由用户决定何时切换。
+    public static func decryptAccount(_ encryptedData: Data, filePassword: String) throws -> ImportedAccount {
+        guard encryptedData.count > 16 else { throw BackupEncryptionError.invalidDataFormat }
+        let salt = encryptedData.prefix(16)
+        let ciphertext = encryptedData.dropFirst(16)
+        let key = deriveKey(password: filePassword, salt: salt)
+        do {
+            let sealedBox = try AES.GCM.SealedBox(combined: ciphertext)
+            let decrypted = try AES.GCM.open(sealedBox, using: key)
+            return try Foundation.JSONDecoder().decode(ImportedAccount.self, from: decrypted)
+        } catch {
+            throw BackupEncryptionError.decryptionFailed
+        }
+    }
+
+    // TreeNB[B1w]: 把保险库记录导出为电脑可用的加密账号配置。
+    public static func encryptAccount(_ account: ImportedAccount, filePassword: String) throws -> Data {
+        let jsonData = try Foundation.JSONEncoder().encode(account)
+        var salt = Data(count: 16)
+        let result = salt.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
+        guard result == errSecSuccess else { throw OperationError.invalidParameters("Failed to generate random salt.") }
+        let key = deriveKey(password: filePassword, salt: salt)
+        let sealedBox = try AES.GCM.seal(jsonData, using: key)
+        guard let combined = sealedBox.combined else { throw OperationError.invalidParameters("Encryption payload failed.") }
+        var finalData = Data()
+        finalData.append(salt)
+        finalData.append(combined)
+        return finalData
+    }
+
+'''
+    s = s.replace(anchor, helpers + anchor, 1)
+    open(ie_path, 'w', encoding='utf-8').write(s)
+    print('  B1w patched: ImportExport.swift (decrypt/encrypt helpers)')
+
+# 3) AppleIDsViewController: 有保存凭据时直接激活，不再要求重新登录
+s = open(ai_path, encoding='utf-8').read()
+if 'TreeNB[B1w]' not in s:
+    old = '''        else
+        {
+            let alert = UIAlertController(
+                title: row.appleID,
+                message: NSLocalizedString(
+                    "Sign in again with this Apple ID to switch to it. Your other Apple IDs stay saved on this device.", comment: ""),
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(
+                title: NSLocalizedString("Sign In & Switch", comment: ""), style: .default
+            ) { [weak self] _ in
+                self?.signIn(offerResignAfterSwitch: true)
+            })
+            alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: ""), style: .cancel))
+            present(alert, animated: true)
+        }
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1w]: AppleIDsViewController switchTo else 锚点缺失')
+    new = '''        else
+        {
+            // TreeNB[B1w]: 保险库里有这个 id 的凭据 → 整包回写 Keychain 直接激活，
+            // 不再要求重新输入账号密码；团队由上面的团队列表决定。
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard let record = TNBAccountVault.shared.record(forEmail: row.appleID),
+                      record.hasUsableCredentials else
+                {
+                    let alert = UIAlertController(
+                        title: row.appleID,
+                        message: "这个 Apple ID 的登录凭据没有保存在本机。登录后会自动存进保险库，以后切换就不用再登录了。",
+                        preferredStyle: .alert
+                    )
+                    alert.addAction(UIAlertAction(
+                        title: NSLocalizedString("Sign In & Switch", comment: ""), style: .default
+                    ) { [weak self] _ in
+                        self?.signIn(offerResignAfterSwitch: true)
+                    })
+                    alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: ""), style: .cancel))
+                    self.present(alert, animated: true)
+                    return
+                }
+                do
+                {
+                    try await TNBAccountVault.shared.activate(accountID: record.id,
+                                                              teamIdentifier: row.teamIdentifier)
+                    self.reload()
+                    ToastView(
+                        text: String(format: NSLocalizedString("Switched to %@", comment: ""), row.appleID),
+                        detailText: "已使用保存的登录态和证书，无需重新登录。"
+                    ).show(in: self.view)
+                }
+                catch
+                {
+                    ToastView(error: error).show(in: self.view)
+                }
+            }
+        }
+'''
+    s = s.replace(old, new, 1)
+    open(ai_path, 'w', encoding='utf-8').write(s)
+    print('  B1w patched: AppleIDsViewController.swift (vault activation)')
+PYB1W
+
+for f in "$KEYCHAIN_FILE" "$IMPEXPORT_FILE" "$APPLE_IDS_FILE"; do
+  grep -q 'TreeNB\[B1w\]' "$f" || { echo "FATAL[B1w]: 保险库补丁未写入 $f" >&2; exit 2; }
+done
+ok "B1w: 多 Apple ID 保险库（切换即激活 / 团队可选 / 电脑证书导入）"
+
+# B1x. 重签/换 id 安装提示中文化：明确「安装这步自动关闭不是闪退」
+# ---------------------------------------------------------------------------
+# 用户反馈重签/换 id/重装到安装这步“秒闪退”。真机无新崩溃日志，且上游文案
+# 原文就是 "will terminate SideStore" —— 这是 iOS 覆盖安装自身的正常行为。
+# 之前是英文，用户看成闪退。改成中文并把原因说清楚。
+python3 - "$RESIGN_VC" <<'PYB1X'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TreeNB[B1x]' not in s:
+    old = 'let paragraph2 = NSLocalizedString("This reinstallation registers the new signature with the OS and will terminate SideStore. You can reopen SideStore immediately once reinstallation is completed.", comment: "")'
+    new = '''// TreeNB[B1x]: iOS 覆盖安装自身必定终止进程；说清楚不是闪退。
+    let paragraph2 = NSLocalizedString("安装这一步会把新签名写入系统，TreeNB 会自动关闭——这是 iOS 的正常行为，不是闪退。等桌面上的图标出现后重新打开即可。", comment: "")'''
+    if old not in s:
+        raise SystemExit('FATAL[B1x]: 重签说明文案锚点缺失')
+    s = s.replace(old, new, 1)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  B1x patched: 重签安装提示中文化')
+PYB1X
+grep -q 'TreeNB\[B1x\]' "$RESIGN_VC" \
+  || { echo "FATAL[B1x]: 重签安装提示未写入" >&2; exit 2; }
+ok "B1x: 重签安装终止提示改为中文，明确不是闪退"
+
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
 # 现象：点小组件里的容器 App，只进 openSSS 界面，不启动对应 guest。
