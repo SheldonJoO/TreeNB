@@ -1369,7 +1369,19 @@ private func tnbPtrOK<T>(_ p: UnsafePointer<T>?) -> Bool {
     guard let p = p else { return false }
     let a = UInt(bitPattern: p)
     guard a > 0x1000 && a < 0x0000_8000_0000_0000 else {
-        NSLog("[TreeNB] TNB_FFI_GUARD_V1 rejected invalid C string pointer \(a)")
+        NSLog("[TreeNB] TNB_FFI_GUARD_V2 rejected invalid C string pointer \(a)")
+        return false
+    }
+    // TreeNB[B1t]: 拦截“错误码被当成 char*”的伪指针。
+    // 真机 .ips 2026-11-27 18:27:02（1620 包，UUID 88219666）符号化：
+    //   getErrorMessage(from:) → err.pointee.message = 0x100000007 →
+    //   String(cString:) → SIGSEGV at KERN_INVALID_ADDRESS 0x100000007。
+    //   0x100000007 低 32 位仅 0x7（典型 FFI 错误码），落在旧白名单内被放行。
+    //   iOS 用户态由 malloc/mmap 分配的字符串指针低 32 位必 ≥ 0x1000（页内偏移
+    //    + 堆基址），不会是 0x7 这种小整数。补这条规则不误伤合法指针。
+    let low32 = UInt32(truncatingIfNeeded: a)
+    guard low32 >= 0x1000 else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_V2 rejected enum-like pointer \(a)")
         return false
     }
     return true
@@ -1379,7 +1391,13 @@ private func tnbPtrOK<T>(_ p: UnsafeMutablePointer<T>?) -> Bool {
     guard let p = p else { return false }
     let a = UInt(bitPattern: p)
     guard a > 0x1000 && a < 0x0000_8000_0000_0000 else {
-        NSLog("[TreeNB] TNB_FFI_GUARD_V1 rejected invalid C string pointer \(a)")
+        NSLog("[TreeNB] TNB_FFI_GUARD_V2 rejected invalid C string pointer \(a)")
+        return false
+    }
+    // TreeNB[B1t]: 同上，拦截低 32 位是小整数的伪指针（错误码 0x7 等）。
+    let low32 = UInt32(truncatingIfNeeded: a)
+    guard low32 >= 0x1000 else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_V2 rejected enum-like pointer \(a)")
         return false
     }
     return true
@@ -1804,6 +1822,123 @@ PYB1S
   ok "B1s: 定位页 DeveloperModeStatus 查询在 VPN 下已跳过"
 else
   echo "FATAL[B1s]: 缺少 $LOCSVC，无法修复定位闪退" >&2
+  exit 2
+fi
+
+# B1u. 重签/证书 UX 优化（修“反人性”流程）
+# ---------------------------------------------------------------------------
+# 真机截图 IMG_3555~3563（2026-11-27 20:08-20:16）反馈：
+#   1) 证书页左滑“激活”对只有公钥的远程证书 (R) 也可点，点了才报
+#      “Cannot activate certificate: private key missing.” —— 明知失败还给按钮。
+#      修：只有 hasPrivateKey(for:) 为 true 才显示 Activate。
+#   2) 重签页英文错误（Team ID / 其他签名工具）甩给用户看不懂。
+#      修：错误文案中文化，并给出明确下一步指引。
+#   ★ 不动 bundle id 计算/签名流水线/全屏/玻璃/B1s。
+CERTS_LIST="$SSS/SideStore/Views/Settings/Advanced/Certificates/CertificatesListView.swift"
+if [ -f "$CERTS_LIST" ]; then
+  python3 - "$CERTS_LIST" <<'PYB1U'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TreeNB[B1u]' in s:
+    print('  B1u already present:', p.split('/')[-1])
+else:
+    old = '''                            } else {
+                                SwiftUI.Button {
+                                    viewModel.makeCertificateActive(cert)
+                                } label: {
+                                    Label("Activate", systemImage: "checkmark.seal")
+                                }
+                                .tint(.green)
+                            }
+'''
+    new = '''                            } else if viewModel.hasPrivateKey(for: cert) {
+                                // TreeNB[B1u]: 只有带私钥的证书才显示 Activate，
+                                // 避免点了才报 private key missing 的反人性体验。
+                                SwiftUI.Button {
+                                    viewModel.makeCertificateActive(cert)
+                                } label: {
+                                    Label("Activate", systemImage: "checkmark.seal")
+                                }
+                                .tint(.green)
+                            }
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1u]: 未找到证书激活按钮锚点')
+    s = s.replace(old, new, 1)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  B1u patched: CertificatesListView.swift (私钥防护)')
+PYB1U
+  grep -q 'TreeNB\[B1u\]' "$CERTS_LIST" \
+    || { echo "FATAL[B1u]: 证书激活防护未写入" >&2; exit 2; }
+  ok "B1u: 证书页无私钥证书不再显示激活按钮"
+else
+  echo "FATAL[B1u]: 缺少 $CERTS_LIST" >&2
+  exit 2
+fi
+
+# B1v. 重签失败错误中文化（修 Apple 英文错误甩给用户）
+# ---------------------------------------------------------------------------
+# 截图 IMG_3563：重签失败弹 “Unable to find a team with the given Team ID
+# '68LPZ6ZK87' to which you belong...(-1)”。这是 Apple 服务器返回，根因是
+# 当前登录的 Apple ID 不属于旧团队（换 id 侧载进来的签名团队）。
+# 修：把这类动态英文错误映射成中文 + 明确下一步，不甩原始英文。
+RESIGN_VC="$SSS/AltStore/Authentication/ResignAltStoreViewController.swift"
+if [ -f "$RESIGN_VC" ]; then
+  python3 - "$RESIGN_VC" <<'PYB1V'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TreeNB[B1v]' in s:
+    print('  B1v already present:', p.split('/')[-1])
+else:
+    old_msg = 'message: error.localizedFailureReason ?? error.localizedDescription, preferredStyle: .alert)'
+    new_msg = 'message: tnbLocalizedResignError(error.localizedFailureReason ?? error.localizedDescription), preferredStyle: .alert)'
+    if old_msg not in s:
+        raise SystemExit('FATAL[B1v]: 未找到重签失败 alert 锚点')
+    s = s.replace(old_msg, new_msg, 1)
+    helper = r'''
+// TreeNB[B1v]: 把重签失败时 Apple 返回的英文错误转成人能看懂的中文指引。
+// 只改展示文案，不改错误本身、不改签名流程。
+@inline(__always)
+private func tnbLocalizedResignError(_ raw: String) -> String {
+    let lower = raw.lowercased()
+    if lower.contains("unable to find a team") || lower.contains("team id") {
+        var teamID = ""
+        if let range = raw.range(of: "Team ID '") {
+            let rest = raw[range.upperBound...]
+            if let end = rest.firstIndex(of: "'") { teamID = String(rest[..<end]) }
+        }
+        let suffix = teamID.isEmpty ? "" : "（团队 \(teamID)）"
+        return "当前登录的 Apple ID 不属于这个开发团队\(suffix)，无法用它重签。"
+            + "\n\n解决办法：\n"
+            + "1) 到「我的 → 账号」登录当初电脑签名用的那个 Apple ID，再重签（保持原应用，不换 id）；\n"
+            + "2) 或改用「换 id 重签」，用当前账号签一个新标识的应用，重装一次后即可正常使用。"
+    }
+    if lower.contains("private key") || lower.contains("no identities") {
+        return "签名证书缺少私钥，无法重签。请在「我的 → 证书」选择带私钥（公钥+私钥）的证书，或重新导入 .p12。"
+    }
+    if lower.contains("expired") {
+        return "签名证书已过期。请用当前 Apple ID 重新申请证书后再重签。"
+    }
+    return raw
+}
+// ===== /TreeNB[B1v] =====
+'''
+    idx = s.rfind('\n}')
+    if idx < 0:
+        raise SystemExit('FATAL[B1v]: 未找到文件结尾')
+    # 插在最后一个 }（private extension 结束括号）之后，作为顶层函数，
+    # 避免变成 extension 实例方法带来的调用歧义。
+    s = s[:idx + 2] + '\n' + helper + s[idx + 2:]
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  B1v patched: ResignAltStoreViewController.swift (错误中文化)')
+PYB1V
+  grep -q 'TreeNB\[B1v\]' "$RESIGN_VC" \
+    || { echo "FATAL[B1v]: 重签错误中文化未写入" >&2; exit 2; }
+  ok "B1v: 重签失败英文错误已中文化并给出操作指引"
+else
+  echo "FATAL[B1v]: 缺少 $RESIGN_VC" >&2
   exit 2
 fi
 
