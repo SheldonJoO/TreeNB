@@ -1685,7 +1685,7 @@ old_cache = '''    if !forceLive, let cachedUDID = Keychain.shared.deviceUDID, !
 new_cache = '''    // TreeNB[B1q]: LocalDevVPN 已连时，live UDID 查询会进 lockdownd FFI 并
     // 因 C 字符串野指针 -16 直接 SIGSEGV。VPN 下即使 forceLive 也只认缓存；
     // 没有缓存就抛可恢复错误，绝不让进程走进 FFI。
-    let vpnRouteActive = minimuxer.core.network.isUTunAvailable
+    let vpnRouteActive = Minimuxer.shared.network.isUTunAvailable
     if (vpnRouteActive || !forceLive), let cachedUDID = Keychain.shared.deviceUDID, !cachedUDID.isEmpty {
         debugLog("[openSSS] fetchUDID() returning cached UDID from Keychain: \\(cachedUDID)")
         return cachedUDID
