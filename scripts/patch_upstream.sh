@@ -1617,77 +1617,97 @@ if grep -q 'ToolbarItemGroup(placement: .navigationBarLeading)' "$TOOLBAR"; then
 fi
 ok "B1r: 顶栏二级菜单已冻结校验（左侧单图标 + 右侧 ⋯）"
 
-# B1q. 定位页 DeveloperModeStatus 往返规避（修 LocalDevVPN 路由下点定位必闪）
+# B1q. VPN 路由下 live UDID 查询规避（修 LocalDevVPN 路由下点定位必闪）
 # ---------------------------------------------------------------------------
-# 真机 .ips（2026-11-27 15:02:43 / 15:07:19，build 202611271439）：
-#   两份日志栈完全一致：_platform_strlen → TreeNB FFI 帧 → com.apple.root.default-qos。
-#   触发条件极窄：只有 LocalDevVPN 的 10.7.0.1/32 路由开启 + 点「定位」Tab。
-#   未开模拟时 refreshStatus(verify:) 只是本地读，不碰设备；唯一会进入
-#   gateway FFI 的是 checkPrerequisites() → isDeveloperModeEnabled() →
-#   lockdownd_get_value(..., "DeveloperModeStatus", "com.apple.security.mac.amfi")。
-#   VPN 关着时连接前置检查提前失败，不会走到这；VPN 开着才进 Rust FFI 并
-#   在 C 字符串边界读到野指针 -16 → strlen(NULL-like) → SIGSEGV。
-#   B1n 只保护 Swift 侧 String(cString:)，保护不到 Rust 内部 CStr::from_ptr，
-#   因此仍然闪。修法：定位页在 utun/VPN 已连接时不再做这次纯展示用的
-#   DeveloperModeStatus 往返（developerMode 显示 nil/未校验），定位本身的
-#   DVT 会话与跳点功能完全不动。配对/签名等其它路径仍照常查询。
-LOCSVC="$SSS/AltStore/Shell/LocationSimulationService.swift"
-if [ -f "$LOCSVC" ]; then
-  python3 - "$LOCSVC" <<'PYB1Q'
+# 真机 .ips（2026-11-27 15:02:43 / 15:07:19，build 202611271439）经 Xcode 26
+# dSYM 精确符号化，两份日志栈完全一致：
+#   _platform_strlen → core::ffi::CStr::from_ptr → plist_new_string →
+#   lockdownd_get_value → IdeviceGateway.syncGetLockdownValue(key:) →
+#   IdeviceGateway.fetchUDID() → withFFIDispatch（com.apple.root.default-qos）。
+# 也就是说闪退并非 DeveloperModeStatus，而是 **fetchUDID("UniqueDeviceID")**
+# 在 LocalDevVPN 的 10.7.0.1/32 路由下进入 lockdownd FFI，C 字符串收到野指针
+# -16 → strlen → SIGSEGV。B1n 只保护 Swift 侧 String(cString:)，保护不到
+# Rust/C 内部的 CStr::from_ptr，所以 1439 包仍闪。
+# 修法（两处，均不动定位会话本身）：
+#   ① MinimuxerImpl.isReady() 里的 fetchUDID() 只用于 verbose 日志；VPN 已连
+#      时直接跳过这次设备往返，用占位字符串写日志。
+#   ② MinimuxerWrapper.fetchUDID(forceLive:) 在 VPN 已连时优先返回 Keychain
+#      缓存；无缓存则抛出可恢复错误而不是进 FFI。
+# 配对/定位/签名的真实设备操作仍走原路径，只是不再做这次致命的 UDID 在线校验。
+MINIMUX_IMPL="$SSS/Dependencies/minimuxer/Sources/MinimuxerImpl.swift"
+MINIMUX_WRAP="$SSS/SideStore/Core/DeviceApi/MinimuxerWrapper.swift"
+for F in "$MINIMUX_IMPL" "$MINIMUX_WRAP"; do
+  [ -f "$F" ] || { echo "FATAL[B1q]: 缺少 $F" >&2; exit 2; }
+done
+python3 - "$MINIMUX_IMPL" "$MINIMUX_WRAP" <<'PYB1Q'
 import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
+impl_path, wrap_path = sys.argv[1:]
 
-old_prereq = '''        var developerMode: Bool? = nil
-        if backendOK && pairingOK
-        {
-            developerMode = try? await OnDeviceLocationService.shared.isDeveloperModeEnabled()
+# ① isReady() 里的 UDID 只进 verboseLog，VPN 下跳过设备往返。
+s = open(impl_path, encoding='utf-8').read()
+old_ready = '''        let deviceUDID: String
+        do {
+            deviceUDID = try await fetchUDID()
+        } catch {
+            return .failure(error)
         }
 '''
-new_prereq = '''        var developerMode: Bool? = nil
-        // TreeNB[B1q]: LocalDevVPN(utun / 10.7.0.1/32) 开启时，定位页的
-        // DeveloperModeStatus 纯展示查询会进入 Rust FFI 的 CStr::from_ptr，
-        // 野指针 -16 → strlen → SIGSEGV（真机 .ips 2026-11-27 15:02/15:07）。
-        // 这里跳过这次往返，developerMode 显示“未校验”；定位功能不动。
-        if backendOK && pairingOK && !tnbLocationVPNRouteActive()
-        {
-            developerMode = try? await OnDeviceLocationService.shared.isDeveloperModeEnabled()
+new_ready = '''        let deviceUDID: String
+        // TreeNB[B1q]: VPN(utun/10.7.0.1) 下 fetchUDID 会进入 lockdownd FFI，
+        // CStr::from_ptr 收到野指针 -16 → strlen → SIGSEGV（真机两次 .ips 已
+        // dSYM 符号化确认）。这里的值只用于下面的 verboseLog，VPN 下用占位符。
+        if self.network.isUTunAvailable {
+            deviceUDID = "localVPN (live UDID check skipped by TreeNB[B1q])"
+        } else {
+            do {
+                deviceUDID = try await fetchUDID()
+            } catch {
+                return .failure(error)
+            }
         }
-'''
-old_catch = '''            if let developerMode = try? await gateway.isDeveloperModeEnabled(), !developerMode
-'''
-new_catch = '''            if !tnbLocationVPNRouteActive(),
-               let developerMode = try? await gateway.isDeveloperModeEnabled(), !developerMode
-'''
-helper = '''
-// TreeNB[B1q] VPN 路由检测：LocalDevVPN 连上后系统会多出 utun 接口。
-// 只用于跳过定位页纯展示用的 DeveloperModeStatus 查询，不改变定位会话。
-@inline(__always)
-private func tnbLocationVPNRouteActive() -> Bool {
-    Minimuxer.shared.network.isUTunAvailable
-}
-// ===== /TreeNB[B1q] =====
 '''
 if 'TreeNB[B1q]' in s:
-    print('  B1q already present:', p.split('/')[-1])
+    print('  B1q already present: MinimuxerImpl.swift')
 else:
-    if old_prereq not in s:
-        raise SystemExit('FATAL[B1q]: 未找到 checkPrerequisites 锚点')
-    if old_catch not in s:
-        raise SystemExit('FATAL[B1q]: 未找到 setLocation catch 锚点')
-    s = s.replace(old_prereq, new_prereq, 1)
-    s = s.replace(old_catch, new_catch, 1)
-    s = s.rstrip() + '\n' + helper
-    open(p, 'w', encoding='utf-8').write(s)
-    print('  B1q patched: LocationSimulationService.swift')
+    if old_ready not in s:
+        raise SystemExit('FATAL[B1q]: 未找到 isReady 的 fetchUDID 锚点')
+    s = s.replace(old_ready, new_ready, 1)
+    open(impl_path, 'w', encoding='utf-8').write(s)
+    print('  B1q patched: MinimuxerImpl.swift')
+
+# ② 强制在线 UDID 查询：VPN 下改走 Keychain 缓存，无缓存则抛出可恢复错误。
+s = open(wrap_path, encoding='utf-8').read()
+old_cache = '''    if !forceLive, let cachedUDID = Keychain.shared.deviceUDID, !cachedUDID.isEmpty {
+        debugLog("[openSSS] fetchUDID() returning cached UDID from Keychain: \\(cachedUDID)")
+        return cachedUDID
+    }
+'''
+new_cache = '''    // TreeNB[B1q]: LocalDevVPN 已连时，live UDID 查询会进 lockdownd FFI 并
+    // 因 C 字符串野指针 -16 直接 SIGSEGV。VPN 下即使 forceLive 也只认缓存；
+    // 没有缓存就抛可恢复错误，绝不让进程走进 FFI。
+    let vpnRouteActive = minimuxer.core.network.isUTunAvailable
+    if (vpnRouteActive || !forceLive), let cachedUDID = Keychain.shared.deviceUDID, !cachedUDID.isEmpty {
+        debugLog("[openSSS] fetchUDID() returning cached UDID from Keychain: \\(cachedUDID)")
+        return cachedUDID
+    }
+    if vpnRouteActive {
+        throw OperationError.unknownUDID(reason: "LocalDevVPN route active; live UDID check skipped by TreeNB[B1q]")
+    }
+'''
+if 'TreeNB[B1q]' in s:
+    print('  B1q already present: MinimuxerWrapper.swift')
+else:
+    if old_cache not in s:
+        raise SystemExit('FATAL[B1q]: 未找到 fetchUDID 缓存锚点')
+    s = s.replace(old_cache, new_cache, 1)
+    open(wrap_path, 'w', encoding='utf-8').write(s)
+    print('  B1q patched: MinimuxerWrapper.swift')
 PYB1Q
-  grep -q 'TreeNB\[B1q\]' "$LOCSVC" \
-    || { echo "FATAL[B1q]: 定位 VPN 闪退修复未写入" >&2; exit 2; }
-  ok "B1q: 定位页 VPN 路由下 DeveloperModeStatus 往返已跳过"
-else
-  echo "FATAL[B1q]: 缺少 $LOCSVC，无法修复定位闪退" >&2
-  exit 2
-fi
+for F in "$MINIMUX_IMPL" "$MINIMUX_WRAP"; do
+  grep -q 'TreeNB\[B1q\]' "$F" \
+    || { echo "FATAL[B1q]: $F 未写入 VPN 防护" >&2; exit 2; }
+done
+ok "B1q: live UDID 查询在 VPN 路由下已改为缓存/占位，杜绝 lockdownd FFI 野指针"
 
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
