@@ -1417,6 +1417,18 @@ private func tnbFree<T>(_ p: UnsafeMutablePointer<T>?) {
     guard let q = p, tnbPtrOK(p) else { return }
     free(UnsafeMutableRawPointer(q))
 }
+// installation_proxy_get_apps 的 outResult 是 UnsafeMutableRawPointer?，
+// 泛型版无法推导 T，必须单独重载（CI 45951137700 编译错误已验证）。
+@inline(__always)
+private func tnbFree(_ p: UnsafeMutableRawPointer?) {
+    guard let q = p else { return }
+    let a = UInt(bitPattern: q)
+    guard a > 0x1000 && a < 0x0000_8000_0000_0000 else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_V1 rejected invalid raw pointer \(a)")
+        return
+    }
+    free(q)
+}
 // ===== /TreeNB[B1n] =====
 '''
 
