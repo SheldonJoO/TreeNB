@@ -1792,7 +1792,7 @@ else:
     idx = s.rfind('\n#endif')
     if idx < 0:
         raise SystemExit('FATAL[B1s]: 未找到文件末尾 #endif')
-    s = s[:idx] + '\\n' + helper + s[idx:]
+    s = s[:idx] + '\n' + helper + s[idx:]
     open(p, 'w', encoding='utf-8').write(s)
     print('  B1s patched: LocationSimulationService.swift')
 PYB1S
