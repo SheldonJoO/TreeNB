@@ -302,12 +302,19 @@ if [ -f "$PROFILE_SRC" ] && ! grep -q 'title: "支持与动力"' "$PROFILE_SRC";
   echo "致命错误: 支持入口未改成支持与动力。" >&2
   exit 1
 fi
-# 4) 容器页：标题 inline（回顶部）+ 小组件图标改星标（与布局切换图标区分）。
+# 4) 容器页：标题 inline（回顶部）+ 小组件仍用星标 + 顶栏只留左侧单图标。
+# B1r 起星标/魔法棒/钥匙/安装都收进右侧 ellipsis.circle 二级菜单，
+# 所以这里既接受旧的 Image(...) 也接受新的 Label(..., systemImage:)。
 if [ -f "$ROOT_VIEW" ]; then
   grep -q 'navigationBarTitleDisplayMode(.inline)' "$ROOT_VIEW" \
     || { echo "致命错误: TreeApps 标题未设 inline，会落在半中位置。" >&2; exit 1; }
-  grep -q 'Image(systemName: "star.fill")' "$ROOT_VIEW" \
-    || { echo "致命错误: 小组件设置图标未改成星标（与布局切换太像）。" >&2; exit 1; }
+  if ! grep -q 'Image(systemName: "star.fill")' "$ROOT_VIEW" \
+     && ! grep -q 'systemImage: "star.fill"' "$ROOT_VIEW"; then
+    echo "致命错误: 小组件设置图标未改成星标（与布局切换太像）。" >&2
+    exit 1
+  fi
+  grep -q 'ellipsis.circle' "$ROOT_VIEW" \
+    || { echo "致命错误: 顶栏二级菜单（ellipsis.circle）丢失。" >&2; exit 1; }
 fi
 # 5) Widget 图标放大到接近原生主屏（>=58pt），不再用 42pt 小图标。
 if [ -f "$WIDGET_VIEW" ] && ! grep -q 'iconSize: 60' "$WIDGET_VIEW"; then
