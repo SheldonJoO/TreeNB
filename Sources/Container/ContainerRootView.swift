@@ -48,50 +48,50 @@ struct ContainerRootView: View {
             // 用户要求标题回到导航栏顶部：large 会让大标题落到内容区半中，inline 才是顶部。
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // 左侧：布局切换 + 小组件筛选。两者图标刻意选成不同形状
-                // （网格 vs 星标），避免之前 square.grid / rectangle.grid 太像分不清。
-                ToolbarItemGroup(placement: .navigationBarLeading) {
+                // TreeNB[B1r]: 顶栏只保留最左侧的布局切换；其余功能统一收进
+                // 右侧「⋯」二级菜单，避免标题被挤成 “Tree...”。
+                ToolbarItem(placement: .navigationBarLeading) {
                     SwiftUI.Button {
                         model.toggleLayout()
                     } label: {
                         Image(systemName: model.layoutMode == .list ? "square.grid.2x2" : "list.bullet")
                     }
                     .accessibilityLabel(model.layoutMode == .list ? "切换到宫格" : "切换到列表")
-                    SwiftUI.Button {
-                        showWidgetSettings = true
-                    } label: {
-                        Image(systemName: "star.fill")
-                    }
-                    .accessibilityLabel("小组件应用设置")
                 }
-                // 右侧：证书 + 导入（+ 仍留在最右，符合 iOS 习惯）。
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    #if DEBUG || TNB_SPIKE
-                    NavigationLink {
-                        SpikeResultView()
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        #if DEBUG || TNB_SPIKE
+                        NavigationLink {
+                            SpikeResultView()
+                        } label: {
+                            Label("Spike 自检", systemImage: "flask.fill")
+                        }
+                        #endif
+                        SwiftUI.Button {
+                            showWidgetSettings = true
+                        } label: {
+                            Label("小组件应用设置", systemImage: "star.fill")
+                        }
+                        SwiftUI.Button {
+                            showBootstrap = true
+                        } label: {
+                            Label("一键自举中心", systemImage: "wand.and.stars")
+                        }
+                        SwiftUI.Button {
+                            showCertificate = true
+                        } label: {
+                            Label("无 JIT 证书设置", systemImage: "key.fill")
+                        }
+                        Divider()
+                        SwiftUI.Button {
+                            showImportMenu = true
+                        } label: {
+                            Label("安装应用", systemImage: "plus.circle.fill")
+                        }
                     } label: {
-                        Image(systemName: "flask.fill")
+                        Image(systemName: "ellipsis.circle")
                     }
-                    .accessibilityLabel("Spike 自检")
-                    #endif
-                    SwiftUI.Button {
-                        showBootstrap = true
-                    } label: {
-                        Image(systemName: "wand.and.stars")
-                    }
-                    .accessibilityLabel("一键自举中心")
-                    SwiftUI.Button {
-                        showCertificate = true
-                    } label: {
-                        Image(systemName: "key.fill")
-                    }
-                    .accessibilityLabel("无 JIT 证书设置")
-                    SwiftUI.Button {
-                        showImportMenu = true
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                    }
-                    .accessibilityLabel("安装应用")
+                    .accessibilityLabel("更多功能")
                 }
             }
             .sheet(isPresented: $showImporter) {
@@ -167,7 +167,7 @@ struct ContainerRootView: View {
                 .foregroundStyle(.secondary)
             Text("还没有侧载的应用")
                 .font(.headline)
-            Text("点右上角 ＋ 导入 IPA，即可在本机容器内安装并运行")
+            Text("点右上角 ⋯ → 安装应用，即可在本机容器内安装并运行")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

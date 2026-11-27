@@ -1604,6 +1604,91 @@ if grep -q 'if false && !UserDefaults.standard.hasCompletedOnboarding' "$LOGVC_F
 fi
 ok "B1p: 全屏 + 玻璃 v3 + B1j + 0419 启动链已冻结校验"
 
+# B1r. 顶栏二级菜单基线（2026-11-27 用户截图反馈：标题被挤成 Tree...）
+# ---------------------------------------------------------------------------
+# 顶栏只保留一个左侧布局切换图标；星标/魔法棒/钥匙/安装全部收进右侧
+# ellipsis.circle 菜单。禁止改回 ToolbarItemGroup 多按钮直排。
+TOOLBAR="$ROOT/Sources/Container/ContainerRootView.swift"
+grep -q 'ellipsis.circle' "$TOOLBAR" \
+  || { echo "FATAL[B1r]: 顶栏二级菜单基线丢失" >&2; exit 2; }
+if grep -q 'ToolbarItemGroup(placement: .navigationBarLeading)' "$TOOLBAR"; then
+  echo "FATAL[B1r]: 左侧多按钮直排重新出现（会挤掉标题）" >&2
+  exit 2
+fi
+ok "B1r: 顶栏二级菜单已冻结校验（左侧单图标 + 右侧 ⋯）"
+
+# B1q. 定位页 DeveloperModeStatus 往返规避（修 LocalDevVPN 路由下点定位必闪）
+# ---------------------------------------------------------------------------
+# 真机 .ips（2026-11-27 15:02:43 / 15:07:19，build 202611271439）：
+#   两份日志栈完全一致：_platform_strlen → TreeNB FFI 帧 → com.apple.root.default-qos。
+#   触发条件极窄：只有 LocalDevVPN 的 10.7.0.1/32 路由开启 + 点「定位」Tab。
+#   未开模拟时 refreshStatus(verify:) 只是本地读，不碰设备；唯一会进入
+#   gateway FFI 的是 checkPrerequisites() → isDeveloperModeEnabled() →
+#   lockdownd_get_value(..., "DeveloperModeStatus", "com.apple.security.mac.amfi")。
+#   VPN 关着时连接前置检查提前失败，不会走到这；VPN 开着才进 Rust FFI 并
+#   在 C 字符串边界读到野指针 -16 → strlen(NULL-like) → SIGSEGV。
+#   B1n 只保护 Swift 侧 String(cString:)，保护不到 Rust 内部 CStr::from_ptr，
+#   因此仍然闪。修法：定位页在 utun/VPN 已连接时不再做这次纯展示用的
+#   DeveloperModeStatus 往返（developerMode 显示 nil/未校验），定位本身的
+#   DVT 会话与跳点功能完全不动。配对/签名等其它路径仍照常查询。
+LOCSVC="$SSS/AltStore/Shell/LocationSimulationService.swift"
+if [ -f "$LOCSVC" ]; then
+  python3 - "$LOCSVC" <<'PYB1Q'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+
+old_prereq = '''        var developerMode: Bool? = nil
+        if backendOK && pairingOK
+        {
+            developerMode = try? await OnDeviceLocationService.shared.isDeveloperModeEnabled()
+        }
+'''
+new_prereq = '''        var developerMode: Bool? = nil
+        // TreeNB[B1q]: LocalDevVPN(utun / 10.7.0.1/32) 开启时，定位页的
+        // DeveloperModeStatus 纯展示查询会进入 Rust FFI 的 CStr::from_ptr，
+        // 野指针 -16 → strlen → SIGSEGV（真机 .ips 2026-11-27 15:02/15:07）。
+        // 这里跳过这次往返，developerMode 显示“未校验”；定位功能不动。
+        if backendOK && pairingOK && !tnbLocationVPNRouteActive()
+        {
+            developerMode = try? await OnDeviceLocationService.shared.isDeveloperModeEnabled()
+        }
+'''
+old_catch = '''            if let developerMode = try? await gateway.isDeveloperModeEnabled(), !developerMode
+'''
+new_catch = '''            if !tnbLocationVPNRouteActive(),
+               let developerMode = try? await gateway.isDeveloperModeEnabled(), !developerMode
+'''
+helper = '''
+// TreeNB[B1q] VPN 路由检测：LocalDevVPN 连上后系统会多出 utun 接口。
+// 只用于跳过定位页纯展示用的 DeveloperModeStatus 查询，不改变定位会话。
+@inline(__always)
+private func tnbLocationVPNRouteActive() -> Bool {
+    Minimuxer.shared.network.isUTunAvailable
+}
+// ===== /TreeNB[B1q] =====
+'''
+if 'TreeNB[B1q]' in s:
+    print('  B1q already present:', p.split('/')[-1])
+else:
+    if old_prereq not in s:
+        raise SystemExit('FATAL[B1q]: 未找到 checkPrerequisites 锚点')
+    if old_catch not in s:
+        raise SystemExit('FATAL[B1q]: 未找到 setLocation catch 锚点')
+    s = s.replace(old_prereq, new_prereq, 1)
+    s = s.replace(old_catch, new_catch, 1)
+    s = s.rstrip() + '\n' + helper
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  B1q patched: LocationSimulationService.swift')
+PYB1Q
+  grep -q 'TreeNB\[B1q\]' "$LOCSVC" \
+    || { echo "FATAL[B1q]: 定位 VPN 闪退修复未写入" >&2; exit 2; }
+  ok "B1q: 定位页 VPN 路由下 DeveloperModeStatus 往返已跳过"
+else
+  echo "FATAL[B1q]: 缺少 $LOCSVC，无法修复定位闪退" >&2
+  exit 2
+fi
+
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
 # 现象：点小组件里的容器 App，只进 openSSS 界面，不启动对应 guest。
