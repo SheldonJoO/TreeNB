@@ -33,6 +33,8 @@ public final class TNBDeepLinkRouter {
     public static let switchToContainerTab = Notification.Name("TNBSwitchToContainerTab")
     public static let launchGuest = Notification.Name("TNBDeepLinkLaunchGuest")
     public static let importApp = Notification.Name("TNBDeepLinkImportApp")
+    /// 一键自举中心收到配对文件/证书后的 UI 刷新通知
+    public static let bootstrapDidImport = Notification.Name("TNBootstrapDidImport")
 
     /// 返回是否由 TreeNB 处理了这个 URL
     @discardableResult
@@ -106,6 +108,37 @@ public final class TNBDeepLinkRouter {
         case "import-app", "import":
             NotificationCenter.default.post(name: Self.switchToContainerTab, object: nil)
             NotificationCenter.default.post(name: Self.importApp, object: nil)
+            return true
+
+        case "pairing-file":
+            // TreeNB 新发明：从 SideStore / 网页一键把配对文件递过来，
+            // 免去用户手动找文件、导入的麻烦（对应 siboot 的 pairingFile 深链）。
+            // 格式：openssai://pairing-file?data=<base64 pairing file>
+            guard let b64 = query["data"],
+                  let raw = Data(base64Encoded: b64),
+                  let text = String(data: raw, encoding: .utf8),
+                  !text.isEmpty else {
+                NSLog("[TreeNB] pairing-file 深链数据无效")
+                return false
+            }
+            do {
+                let parsed = try PairingFileManager.shared.savePairingFile(contents: text)
+                PairingFileManager.shared.persistedActiveProtocol = parsed.mode
+                UserDefaults.standard.set("配对文件已从深链导入 ✅", forKey: "TNBootstrapLastResult")
+                NotificationCenter.default.post(name: Self.bootstrapDidImport, object: nil)
+                NSLog("[TreeNB] 配对文件深链导入成功 mode=%@", parsed.mode.rawValue)
+                return true
+            } catch {
+                UserDefaults.standard.set("配对文件导入失败：\(error.localizedDescription)",
+                                          forKey: "TNBootstrapLastResult")
+                NotificationCenter.default.post(name: Self.bootstrapDidImport, object: nil)
+                return false
+            }
+
+        case "bootstrap":
+            // openssai://bootstrap —— 直接打开一键自举中心
+            NotificationCenter.default.post(name: Self.switchToContainerTab, object: nil)
+            NotificationCenter.default.post(name: Self.bootstrapDidImport, object: "open")
             return true
 
         default:

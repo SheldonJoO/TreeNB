@@ -1,0 +1,5 @@
+[target.aarch64-unknown-linux-musl]
+# musl target is fully static by default. cross provides the aarch64 musl linker.
+# Do NOT override relocation-model here: cross's toolchain image sets the right
+# link flags; forcing -no-pie breaks its bundled linker.
+rustflags = ["-C", "target-feature=+crt-static"]

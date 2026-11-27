@@ -32,7 +32,7 @@ echo "  UIBackgroundModes 含 location，校验通过"
 # 且不得编入旧的 C 假桩（否则 duplicate symbol 或定位仍是假的）。
 IDEF_LIB="upstream/openSSS/local/idevice/swift/IDevice.xcframework/ios-arm64/libidevice_ffi.a"
 if [ ! -f "$IDEF_LIB" ]; then
-  echo "致命错误: 缺少自编译 IDevice 产物 $IDEF_LIB，虚拟定位会失效。" >&2
+  echo "致命错误: 缺少自编译 IDevice 产物 ${IDEF_LIB}，虚拟定位会失效。" >&2
   echo "请确认 CI/本地已跑 scripts/build_idevice.sh。" >&2
   exit 1
 fi
@@ -298,8 +298,8 @@ if [ -f "$APPS_SRC" ] && ! grep -q 'navigationItem.title = "🌲TreeNB Ⅱ"' "$A
   echo "致命错误: 应用页大标题未改成 TreeNB Ⅱ。" >&2
   exit 1
 fi
-if [ -f "$PROFILE_SRC" ] && ! grep -q 'title: "支持 TreeNB Ⅱ"' "$PROFILE_SRC"; then
-  echo "致命错误: 支持入口未改成 TreeNB Ⅱ。" >&2
+if [ -f "$PROFILE_SRC" ] && ! grep -q 'title: "支持与动力"' "$PROFILE_SRC"; then
+  echo "致命错误: 支持入口未改成支持与动力。" >&2
   exit 1
 fi
 # 4) 容器页：标题 inline（回顶部）+ 小组件图标改星标（与布局切换图标区分）。
@@ -492,6 +492,104 @@ if ! grep -q 'TNBLastGuestLaunchError' "$ENGINE_SRC"; then
   exit 1
 fi
 echo "  JIT-less 签名链路校验通过（ZSign.dylib + 证书导入 + 无密码支持 + 错误透传 + UI 均在）"
+
+# Husk 翻译层（安卓 APK 运行引擎）构建期铁证
+echo "==> 校验 Husk 翻译层（APK 运行引擎）"
+if [ ! -d "$APP/Frameworks/HuskyEngine.framework" ]; then
+  echo "致命错误: 包内缺少 Frameworks/HuskyEngine.framework！翻译层未编入。请检查 project.yml 的 HuskyEngine target。" >&2
+  exit 1
+fi
+if [ ! -f "$APP/Frameworks/HuskyEngine.framework/HuskyEngine" ] && [ ! -f "$APP/Frameworks/HuskyEngine.framework/Husky" ]; then
+  echo "警告: HuskyEngine.framework 未找到可执行文件，检查 PRODUCT_NAME。"
+fi
+if ! find "$APP" -name 'libANGLE-shared.dylib' | grep -q .; then
+  echo "致命错误: 包内缺少 libANGLE-shared.dylib！游戏渲染会失败。检查 project.yml 资源段。" >&2
+  exit 1
+fi
+if ! find "$APP" -name 'cacert.pem' | grep -q .; then
+  echo "警告: 包内缺少 cacert.pem，游戏的 HTTPS 证书校验可能失败。"
+fi
+# 加号菜单 APK 入口（源码级校验，Swift 字符串编译后会被拆分，字节流搜不到）
+# 入口在「树🌲应用」Tab 的 ContainerRootView 加号里（不在侧载页 AppsViewController）。
+CONTAINER_SRC="Sources/Container/ContainerRootView.swift"
+for needle in 'showAPK' '安装安卓 APK' 'HuskyAPKView()' 'confirmationDialog'; do
+  if ! grep -q "$needle" "$CONTAINER_SRC"; then
+    echo "致命错误: 树🌲应用 加号缺少 APK 入口（${needle}）。检查 ContainerRootView.swift。" >&2
+    exit 1
+  fi
+done
+if ! grep -q 'org.android.package-archive' project.yml; then
+  echo "致命错误: project.yml 未声明 .apk 文档类型，文件选择器选不了 APK。" >&2
+  exit 1
+fi
+# JIT-less AOT 链路：bridge 必须暴露转换 API，Swift 必须在 launch 前调用，
+# 否则 APK 里的 .so 无法转成签名 dylib，游戏会全部卡在加载原生库（黑屏）。
+if ! grep -q 'prepareAOTForAPKs' vendor/husk/bridge/HuskyEngine.m; then
+  echo "致命错误: HuskyEngine.m 缺少 prepareAOTForAPKs（JIT-less AOT 转换未接）。" >&2
+  exit 1
+fi
+if ! grep -q 'husk_codesign_chain_from_executable' vendor/husk/bridge/HuskyEngine.m; then
+  echo "致命错误: HuskyEngine.m 未提取 App 证书链，签名 dylib 不会被 iOS 信任。" >&2
+  exit 1
+fi
+if ! grep -q 'prepareAOT(apkPaths:' Sources/Container/HuskyGameView.swift; then
+  echo "致命错误: HuskyGameView 未在 launch 前调用 AOT 转换。" >&2
+  exit 1
+fi
+echo "  Husk 翻译层校验通过（framework + ANGLE + 证书 + 加号入口 + AOT 转换 + APK 文档类型）"
+
+echo "==> [1.9/4] 校验全 App 玻璃与时间戳版本号"
+if ! grep -q 'backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)' Sources/Container/GlassChrome.swift; then
+  echo "致命错误: GlassChrome.swift 未使用系统 backgroundEffect 毛玻璃（v1 插子视图会穿模）。" >&2
+  exit 1
+fi
+if grep -q 'tnbGlassNavLayout\|insertSubview(blur' Sources/Container/GlassChrome.swift; then
+  echo "致命错误: GlassChrome.swift 仍含 swizzler/insertSubview 穿模实现。" >&2
+  exit 1
+fi
+if ! grep -q 'GlassChrome.install()' upstream/openSSS/AltStore/main.swift; then
+  echo "致命错误: main.swift 未安装 GlassChrome，导航栏/Tab 栏玻璃不会生效。" >&2
+  exit 1
+fi
+# 注意：不能 `strings | grep -q`。二进制大时 grep -q 命中即退出会让 strings
+# 收到 SIGPIPE（"failed to flush output"），在 pipefail 下被误判为校验失败。
+TNB_STRINGS=$(mktemp)
+strings "$APP/$MAIN_EXE" > "$TNB_STRINGS" 2>/dev/null || true
+if ! grep -q 'TNB_GLASS_APPEARANCE_V2' "$TNB_STRINGS"; then
+  echo "致命错误: 主二进制缺少 TNB_GLASS_APPEARANCE_V2，v2 玻璃实现未编入。" >&2
+  rm -f "$TNB_STRINGS"
+  exit 1
+fi
+rm -f "$TNB_STRINGS"
+SHORT_VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist" 2>/dev/null || true)
+BUILD_VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist" 2>/dev/null || true)
+if ! echo "$SHORT_VER" | grep -Eq '^1\.0\.[0-9]{6}$'; then
+  echo "致命错误: CFBundleShortVersionString=[$SHORT_VER] 不是 1.0.YYMMDD 时间戳格式。" >&2
+  exit 1
+fi
+if ! echo "$BUILD_VER" | grep -Eq '^[0-9]{12}$'; then
+  echo "致命错误: CFBundleVersion=[$BUILD_VER] 不是 YYYYMMDDHHMM 时间戳格式。" >&2
+  exit 1
+fi
+echo "  全 App 玻璃 + 时间戳版本号校验通过（${SHORT_VER} / ${BUILD_VER}）"
+
+# ★ B1j 硬校验（2026-11-27 闪退根因）：启动期强制设备往返必须已移除，
+# 否则 LocalDevVPN 开着时 fetchUDID(forceLive:true) 触发 minimuxer FFI
+# strlen(NULL) → SIGSEGV（真机 .ips 09:05 已确认）。
+BOOTMGR_SRC="upstream/openSSS/SideStore/AppBootManager.swift"
+if [ -f "$BOOTMGR_SRC" ]; then
+  if ! grep -q 'TreeNB\[B1j\]' "$BOOTMGR_SRC"; then
+    echo "致命错误: AppBootManager 未打 B1j 补丁（启动期强制设备往返未移除，VPN 开着会闪退）。" >&2
+    exit 1
+  fi
+  if grep -q 'fetchUDID(forceLive: true)' "$BOOTMGR_SRC"; then
+    echo "致命错误: AppBootManager 仍残留启动期 fetchUDID(forceLive: true)。" >&2
+    exit 1
+  fi
+  echo "  B1j 启动期防闪退校验通过（无强制设备往返）"
+else
+  echo "警告: 找不到 $BOOTMGR_SRC，跳过 B1j 校验" >&2
+fi
 
 echo "==> [2/4] 移除签名残留（无签名包）"
 find "$APP" -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TreeNB</title>
+<style>
+  :root{color-scheme:dark;--bg:#000;--card:#1c1c1e;--line:#2c2c2e;--txt:#f2f2f7;--mut:#8e8e93;--blue:#0a84ff;--green:#30d158}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+  .sheet{max-width:520px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
+  .bar{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .bar b{font-size:16px;font-weight:600}
+  .btn{width:34px;height:34px;border-radius:50%;background:#2c2c2e;border:0;color:var(--txt);font-size:17px;display:flex;align-items:center;justify-content:center}
+  .steps{padding:8px 18px;flex:1}
+  .step{display:flex;gap:12px;align-items:flex-start;padding:16px 2px;border-bottom:1px solid var(--line)}
+  .dot{width:22px;height:22px;border-radius:50%;border:2px solid #48484a;flex:none;margin-top:1px;display:flex;align-items:center;justify-content:center}
+  .dot.done{background:var(--green);border-color:var(--green);color:#000;font-size:13px;font-weight:700}
+  .dot.active{border:2px solid var(--blue);border-top-color:transparent;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .st{flex:1;min-width:0}
+  .st b{display:block;font-size:15px;font-weight:600}
+  .st span{color:var(--mut);font-size:13px}
+  .st .right{float:right;color:var(--mut);font-size:13px}
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px}
+  .dlg{width:100%;max-width:460px;background:var(--card);border-radius:18px;padding:18px}
+  .dlg h3{margin:2px 0 14px;font-size:17px;font-weight:600}
+  .choice{display:block;width:100%;text-align:left;background:#2c2c2e;color:var(--txt);border:0;border-radius:12px;padding:14px 16px;margin-bottom:10px;font-size:15px}
+  .reply{width:100%;background:#2c2c2e;color:var(--txt);border:1px solid #48484a;border-radius:12px;padding:14px 16px;margin-bottom:12px;font-size:16px;outline:none}
+  .reply:focus{border-color:var(--blue)}
+  .certlist{max-height:45vh;overflow:auto;margin-bottom:14px}
+  .certitem{display:flex;gap:12px;align-items:flex-start;background:#2c2c2e;border-radius:12px;padding:13px 14px;margin-bottom:10px}
+  .certitem input{width:20px;height:20px;flex:none;margin-top:2px;accent-color:#0a84ff}
+  .certitem .cl{font-size:14px;line-height:1.4}
+  .certitem .cs{color:var(--mut);font-size:12px;word-break:break-all}
+  .primary{background:var(--blue);color:#fff}
+  .pin{font:700 46px/1.1 ui-monospace,monospace;letter-spacing:10px;text-align:center;color:var(--green);margin:8px 0 4px}
+  .pairstep{font-size:14px;line-height:1.6;color:var(--txt);margin:10px 0}
+  .pairstep b{color:var(--blue)}
+  .pairwait{text-align:center;color:var(--mut);font-size:14px;padding:18px 0}
+  .foot{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 30px;color:var(--mut);font-size:12px}
+  .foot label{display:flex;gap:8px;align-items:center}
+  pre{display:none;white-space:pre-wrap;word-break:break-all;font:11px/1.5 ui-monospace,monospace;color:var(--mut);padding:0 18px 18px;max-height:180px;overflow:auto}
+  pre.show{display:block}
+  .hide{display:none!important}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="bar"><button class="btn" aria-label="关闭">×</button><b>TreeNB</b><button class="btn" aria-label="更多">···</button></div>
+  <div class="steps" id="steps"></div>
+  <pre id="log"></pre>
+  <div class="foot"><label><input type="checkbox" id="details"> 显示详情</label><span>为 TreeNB 打造</span></div>
+</div>
+<div class="mask hide" id="mask"><div class="dlg" id="dlg"></div></div>
+<div class="mask" id="pairmask"><div class="dlg" id="pairdlg"></div></div>
+<script>
+var base = location.pathname.replace(/\/$/, '');
+var lastDlgKey = '';          // 当前已渲染的对话框标识，避免轮询重复重建
+var lastPairKey = '';         // 配对浮层标识，避免轮询重复重建
+function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}
+
+function renderPairing(s){
+  var pm=document.getElementById('pairmask'), pd=document.getElementById('pairdlg');
+  if(!s.pairing_active){ lastPairKey=''; pm.classList.add('hide'); return; }
+  var pk = 'p|'+(s.pairing_pin||'');
+  if(pk!==lastPairKey){
+    lastPairKey=pk;
+    if(s.pairing_pin){
+      pd.innerHTML='<h3>这台 iPhone 的配对码</h3>'+
+        '<div class="pin">'+esc(s.pairing_pin)+'</div>'+
+        '<div class="pairstep"><b>这个码由 TreeNB 生成，要你输入到「设置」里</b>——不是让你在这里填，也不是短信验证码。</div>'+
+        '<div class="pairstep">切到「设置」，在刚才那个配对框里输入这 <b>6 位码</b>。码也会以<b>通知</b>形式弹在屏幕上方，不用切回来看。</div>'+
+        '<div class="pairstep" style="color:var(--mut);font-size:13px">输完不用回到这里，配对成功后会自动安装。切回 Open Minis 时把播放器关掉即可。</div>';
+    } else {
+      pd.innerHTML='<h3>正在准备设备配对</h3>'+
+        '<div class="pairwait"><div class="dot active" style="margin:0 auto 14px;width:30px;height:30px"></div>正在广播可配对服务，等待系统连接…</div>'+
+        '<div class="pairstep"><b>第 1 步：</b>屏幕上会弹出一个<b>播放器</b>（在放静音）。<b>不要关闭它</b>——它让 Open Minis 在后台保持运行，否则一切到设置，「Pair with TreeNB」就会消失。</div>'+
+        '<div class="pairstep"><b>第 2 步：</b>切到 设置 → 隐私与安全性 → 开发者模式 → 点 <b>Pair with TreeNB</b> → 先输<b>锁屏密码</b>。</div>'+
+        '<div class="pairstep">连上后，<b>6 位配对码会以通知弹出</b>，也会显示在这里。把码填进设置的配对框即可。</div>'+
+        '<div class="pairstep" style="color:var(--mut);font-size:13px">若设置里没有 TreeNB 或一直转圈：确认播放器没关、Open Minis 是 1.16+ 且为「增强后台」；展开「显示详情」看广播是否就绪。</div>';
+    }
+  }
+  pm.classList.remove('hide');
+}
+
+function postReply(v){
+  // 提交后强制下次 poll 重建对话框（可能是同类型的新问询，如登录失败重试）
+  lastDlgKey = '';
+  fetch(base+'/reply',{method:'POST',body:v}).then(poll);
+  document.getElementById('mask').classList.add('hide');
+}
+
+function buildDialog(s, dlg, mask){
+  if(s.dialog==='account-picker'){
+    var html='<h3>使用哪个 Apple 账户登录？</h3>';
+    s.accounts.forEach(function(a){html+='<button class="choice" data-account="'+esc(a)+'">'+esc(a)+'</button>'});
+    html+='<button class="choice" data-account="__new__">使用其他 Apple 账户</button>';
+    html+='<button class="choice" data-action="forget">移除某个 Apple 账户</button>';
+    html+='<button class="choice" data-action="back">返回</button>';
+    dlg.innerHTML=html;
+    dlg.querySelectorAll('[data-account]').forEach(function(b){b.onclick=function(){
+      var email=this.getAttribute('data-account');
+      if(email==='__new__'){email=prompt('请输入 Apple ID 邮箱')||''; if(!email)return;}
+      postReply(email);
+    }});
+    dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
+    dlg.querySelector('[data-action="forget"]').onclick=function(){alert('账号管理即将开放')};
+  } else if(s.dialog==='password'||s.dialog==='code'){
+    var isCode=s.dialog==='code';
+    dlg.innerHTML='<h3>'+esc(s.prompt)+'</h3>'+
+      '<input class="reply" id="replyInput" type="'+(isCode?'text':'password')+'" '+
+      'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" '+
+      'placeholder="'+(isCode?'6 位验证码':'Apple ID 密码')+'">'+
+      '<button class="choice primary" data-action="submit">确认</button>'+
+      '<button class="choice" data-action="back">取消</button>';
+    var input=document.getElementById('replyInput');
+    // 只在首次建框时聚焦一次：轮询里反复 focus 会让 iOS 键盘/输入被打断
+    try{input.focus()}catch(e){}
+    dlg.querySelector('[data-action="submit"]').onclick=function(){
+      var v=input.value.trim(); if(!v)return; postReply(v);
+    };
+    input.onkeydown=function(e){if(e.key==='Enter'){var v=input.value.trim(); if(v)postReply(v)}};
+    dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
+  } else if(s.dialog==='cert-picker'){
+    var list='<div class="certlist">';
+    if(!s.certificates.length){
+      list+='<div style="color:var(--mut);font-size:14px;padding:8px 0">没有可吊销的证书</div>';
+    }
+    s.certificates.forEach(function(c,i){
+      list+='<label class="certitem"><input type="checkbox" class="certchk" value="'+esc(c.serial)+'">'+
+            '<span class="cl"><span style="font-weight:600">证书 '+(i+1)+'</span><br>'+
+            '<span class="cs">'+esc(c.label)+'</span></span></label>';
+    });
+    list+='</div>';
+    dlg.innerHTML='<h3>'+esc(s.prompt||'证书已满，请选择要吊销的证书')+'</h3>'+list+
+      '<button class="choice primary" data-action="submit">吊销所选并重试</button>'+
+      '<button class="choice" data-action="back">取消</button>';
+    dlg.querySelector('[data-action="submit"]').onclick=function(){
+      var picked=[];
+      dlg.querySelectorAll('.certchk').forEach(function(c){if(c.checked)picked.push(c.value)});
+      if(!picked.length){alert('请至少勾选一个证书');return}
+      postReply(picked.join(','));
+    };
+    dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
+  } else if(s.dialog==='error'){
+    dlg.innerHTML='<h3>'+esc(s.prompt||'出了点问题')+'</h3><button class="choice" data-action="back">返回</button>';
+    dlg.querySelector('[data-action="back"]').onclick=function(){postReply('')};
+  }
+  mask.classList.remove('hide');
+}
+
+function render(s){
+  document.getElementById('steps').innerHTML = s.steps.map(function(st){
+    var dot = st.state==='done' ? '<div class="dot done">✓</div>'
+            : st.state==='active' ? '<div class="dot active"></div>'
+            : st.state==='error' ? '<div class="dot done" style="background:#ff453a;border-color:#ff453a">!</div>'
+            : '<div class="dot"></div>';
+    var right = (st.state==='active' && s.elapsed) ? '<span class="right">'+s.elapsed+'s</span>' : '';
+    return '<div class="step">'+dot+'<div class="st"><b>'+esc(st.name)+right+'</b><span>'+esc(st.detail)+'</span></div></div>';
+  }).join('');
+
+  renderPairing(s);
+
+  var mask=document.getElementById('mask'), dlg=document.getElementById('dlg');
+  var certKey = (s.certificates||[]).map(function(c){return c.serial}).join(',');
+  var key = s.dialog ? (s.dialog+'|'+(s.prompt||'')+'|'+s.accounts.join(',')+'|'+certKey) : '';
+  if(s.dialog && s.dialog!=='none' && !s.pairing_active){
+    // 关键：同一个对话框只构建一次，轮询绝不碰 input，用户输入才不会被冲掉
+    if(key!==lastDlgKey){ lastDlgKey=key; buildDialog(s,dlg,mask); }
+    else mask.classList.remove('hide');
+  } else {
+    lastDlgKey=''; mask.classList.add('hide');
+  }
+
+  var log=document.getElementById('log');
+  log.textContent=s.log.join('\n');
+  log.className=document.getElementById('details').checked?'show':'';
+}
+function poll(){
+  fetch(base+'/status').then(function(r){return r.json()}).then(render).catch(function(){});
+}
+document.getElementById('details').onchange=poll;
+poll(); setInterval(poll, 800);
+</script>
+</body>
+</html>

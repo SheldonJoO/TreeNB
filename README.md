@@ -1,121 +1,110 @@
-# TreeNB 🌲
+# 🌲 TreeNB（TreeNewBee Ⅱ · 树应用）
 
-**TreeNewBee2 · 树应用** —— 把 openSSS 的签名/续签内核、LiveContainer 的多 App 侧载容器、TreeWidget 小组件，整合进**一个 App、一次安装、零跳转**。
+**一个 IPA，装完就是完整的侧载环境 —— 签名、续签、多 App 容器、小组件，全在这一个 App 里，零跳转。**
 
-## 目标（一句话）
+> 把 openSSS 的手机端签名内核、LiveContainer 的多 App 容器、TreeWidget 小组件，揉进同一个 App。
+> 首次安装**不需要电脑、不需要 SideInstaller、不需要先装别的 App**——打开网页、复制一条命令、登录 Apple ID，装完即用。
 
-> 打开就是 openSSS 的界面（Apps / 定位 / 容器 / 我的），多 App 容器是里面的一个 Tab，
-> 不再有"点一下跳到另一个 App、宿主退到后台"的割裂感。
+[⬇️ 下载 IPA](https://github.com/SheldonJoO/TreeNB/releases/latest) · [📦 免电脑安装](https://treenb-install.app.workbuddy.host/?sharecode=5Z4WZDFFYR) · [💬 反馈 Issue](https://github.com/SheldonJoO/TreeNB/issues)
 
-## 为什么不是一个 `import` 就完事
+---
 
-LiveContainer 不是普通库，它是一台**会接管整车的发动机**：
+## 🔥 为什么是它
 
-```
-main.c → LiveContainerMain → invokeAppMain()
-                              └─ 把进程主线权交给 guest 的 UIApplicationMain
-                                 宿主界面退到后台 ← 这就是"跳转"的来源
-```
+市面上的侧载方案，要么电脑常驻，要么先装 A 再装 B，要么切个 App 就跳出去、宿主退到后台。
 
-TreeNB 的核心改造：**反转主从关系**
+TreeNB 的解法：
 
-| | TreeNewBee（现状） | TreeNB（目标） |
-|---|---|---|
-| 主界面 | LiveContainer 的三 Tab | openSSS 的 Shell 四 Tab（含容器） |
-| openSSS | guest，被 dylibify 塞进 framework | 本体，直接编译进主 App |
-| 容器多开 | 宿主能力 | 内嵌 Tab，guest 仍走进程接管 |
-| 跳转 | 点 openSSS Tab 触发 | **无** —— 默认就在 openSSS |
-| 打包 | 八步补丁 + mangled name 替换 | 标准 archive，冗余 hack 全删 |
+- **单包合一** —— openSSS 做主壳（Apps / 定位 / 树应用 / 我的四个 Tab），LiveContainer 降级成内嵌 framework，容器 Tab 就在 App 里，点开 guest 不再跳出宿主。
+- **免电脑首次安装** —— 网页生成一条命令，在「Open Minis」里粘贴，本地网页登录 Apple ID、自配对、签名、安装一条龙。全程不依赖任何第三方安装器。
+- **签名权留在手机上** —— 免费 Apple ID 就能签，7 天到期后台自动续；anisette 多服务器轮换，证书满/握手失败能自动切换。
+- **中文是一等公民** —— 界面第一语言就是中文（`CFBundleDevelopmentRegion = zh-Hans`），不是英文之上的翻译补丁。
+- **小组件直达** —— TreeWidget 已并入同一个包，从桌面小组件一键打开容器里的 App，配品牌过渡层遮住中间页面。
 
-## 工程状态
+---
 
-✅ **Spike 包已在 GitHub Actions 构建成功**（2026-11-23，run `45200991926`）——产物 `TreeNB-spike` 已解包校验：
-- 主 App `com.openssai.app`，显示名「树应用」，最低 iOS 15
-- `Frameworks/`：`LiveContainerShared.framework`、`LiveContainerSwiftUI.framework`、`OpenSSL.framework`
-- `PlugIns/AltWidgetExtension.appex`：`com.apple.widgetkit-extension` 小组件已并入同一个包
-- 全程 CI 编译出包，本机无需 Xcode 16.4
+## ✨ 功能
 
-✅ **已落地**：xcodegen 工程定义（4 targets）、LC 引擎适配桥接、容器 Tab SwiftUI（导入 / 列表 / 启动 / 返回）、深链路由、自动改造补丁、CI、Spike 自检页
+| 功能 | 说明 |
+|---|---|
+| 📲 手机端签名 | 免费 Apple ID 直接在手机上签名安装 IPA，不用电脑常驻 |
+| 🔄 后台自动续签 | 证书到期前自动刷新，不掉签 |
+| 🌲 多 App 容器 | LiveContainer 内嵌为 Tab，导入 / 安装 / 启动 / 返回闭环；支持 Husk 翻译层跑部分安卓 APK/游戏 |
+| 📍 虚拟定位 | 设备本地直连（Apple DVT 开发者服务）或 Mac 定位助手，系统级生效 |
+| 🧩 小组件 | TreeWidget 并入主包，桌面一键直达容器 App |
+| 🌐 Anisette 管理 | 服务器可排序、隐藏、自定义；多服务器轮换，优先用实测可用的节点 |
+| 🎨 外观主题 | 跟随系统 / 浅色 / 深色 + 强调色；切前台加快照遮罩，杜绝闪屏 |
+| ⏰ 到期提醒 | 证书到期前 24 小时提醒 |
 
-⏳ **待真机验证**：把未签名 Spike IPA 侧载到 iPhone，打开容器页右上角 🧪，看三问红绿勾（LC 作为内嵌 framework 的 swizzle / guest 往返）
-🔲 **未做**：正式签名包（release + Secrets）、业务功能铺开、多版本回归
+---
 
-## 目录
+## 📦 首次安装（免电脑）
 
-```
-TreeNB/
-├── .github/workflows/build.yml      # CI：public repo + macos-15-intel，免费无限
-├── project.yml                      # xcodegen 工程定义（4 targets）
-├── config/
-│   ├── TreeNB.xcconfig              # 全局配置（bundle id / 部署目标 / App Group）
-│   ├── TreeNB-Info.plist            # 主 App（含 openssai/sidestore/livecontainer scheme）
-│   ├── TreeNB.entitlements          # App Group + Keychain + 128 组兼容
-│   ├── AltWidget-Info.plist         # Widget extension（iOS16）
-│   └── AltWidgetExtension.entitlements
-├── scripts/
-│   ├── prepare_dependencies.sh      # 拉上游 → 打补丁 → OpenSSL → 生成工程
-│   ├── patch_upstream.sh            # ★ 自动改造：删跳转 / 身份归一 / Widget 并入
-│   ├── assemble_ipa.sh              # archive → 无签名 IPA
-│   └── sign_ipa.sh                  # release 时用 Secrets 正式签名
-├── Sources/
-│   ├── Bridge/                      # LC 引擎 C/ObjC 适配层（framework 入口）
-│   │   ├── include/LCEngineEntry.h  # guest 启停 / IPA 安装 / 签名 API
-│   │   └── LCEngineEntry.m
-│   ├── Container/                   # 容器 Tab（SwiftUI）
-│   │   ├── ContainerTabViewController.swift  # 接入 openSSS Shell 的第四个 Tab
-│   │   ├── ContainerRootView.swift           # 导入/列表/启动界面
-│   │   └── ContainerViewModel.swift          # 状态机
-│   ├── Routing/TNBDeepLinkRouter.swift       # openssai:// 统一深链分发
-│   ├── Widget/                      # TreeWidget 并入（无 @main）
-│   │   ├── TreeWidgetBridge.swift   # Keychain/AppGroup 数据桥
-│   │   └── TreeLaunchWidget.swift   # Widget 定义
-│   └── Spike/EngineSpikeProbe.swift         # 三问验证探针（DEBUG/TNB_SPIKE 门禁）
-├── upstream/                        # 上游源码（准备脚本拉取，不入 git）
-│   ├── openSSS/                     # AltStore/ SideStore/ Shared/ AltWidget/
-│   └── TreeNewBee/                  # LiveContainer/ LiveContainerSwiftUI/
-└── docs/
-    ├── 启动链改造设计.md             # 无跳转核心技术方案 + 逐文件改造清单
-    └── Spike验证指南.md              # ★ 真机三问验证步骤（写代码前的风险闸门）
-```
+1. 用 iPhone 的 Safari 打开 **[免电脑安装页](https://treenb-install.app.workbuddy.host/?sharecode=5Z4WZDFFYR)**
+2. 按页面提示复制那条命令
+3. 在 **Open Minis**（一个在 iOS 上跑 aarch64 Linux 的开源终端）里粘贴执行
+4. 终端会拉起一个**本地网页** → 在里面登录 Apple ID、过 2FA
+5. 按网页指引打开系统「开发者选项」，用 **TreeNB 生成的配对码**完成自配对（方向是：TreeNB 生成码 → 你输入到系统设置里）
+6. 网页自动签名并安装 TreeNB，装完打开即用
 
-## 构建
+> ⚠️ 整个过程不需要电脑、不需要 SideInstaller、不需要先装别的 App。 pairing file 与证书都留在设备本机。
+> 若某个 anisette 服务器登录失败，引擎会自动轮换到下一个；目前实测 `ani.jkcoxson.com` 可用。
 
-**CI（推荐）**：把仓库设为 **public**，push 到 `main` 自动 archive；打 release tag 自动签名出包。
-public repo 的 standard runners（含 macOS）免费且无限，不消耗 private 的分钟额度。
-`macos-15-intel`（4核/14GB）自带 Xcode 16.4，比 M1（7GB）稳。
+---
 
-**本地**：需要 macOS 15.3+ / Xcode 16.4（本机 MacBookPro12,1 达不到，编译请走 CI）。
+## 🔨 从源码构建
+
+要求：macOS 15.3+ / Xcode 16.4（本机达不到请用 CI）。
 
 ```bash
-./scripts/prepare_dependencies.sh   # 拉上游 → 补丁 → xcodegen generate → fix_scheme.py
+./scripts/prepare_dependencies.sh   # 拉上游 → 打补丁 → xcodegen generate
 xcodebuild archive -project TreeNB.xcodeproj -scheme TreeNB-App \
   -archivePath build/TreeNB.xcarchive -sdk iphoneos -arch arm64 \
   -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 ./scripts/assemble_ipa.sh
 ```
 
-> ⚠️ scheme 名是 `TreeNB-App`（不是 `TreeNB`）——避免与同名 target 冲突导致
-> xcodegen 生成空 archive action。`fix_scheme.py` 会从 pbxproj 重建正确 scheme。
-> 构建中遇到的其他坑见 `docs/CI构建踩坑记录.md`。
+> scheme 名是 `TreeNB-App`（不是 `TreeNB`）——避免与同名 target 冲突导致空 archive。
+> 构建踩坑见 `docs/CI构建踩坑记录.md`。
 
-## 落地顺序（别跳步）
+### 引擎（bootstrap）自检
 
-1. **Spike 三问**（`docs/Spike验证指南.md`，1–2 周）——验证 LC 引擎内嵌的 swizzle 冲突。
-   **三问全绿前，禁止写业务代码。** 失败即转方案 B（appex + XPC）。
-2. 容器 Tab 最小闭环（导入 → 安装 → 列表 → 启动 → 返回）
-3. Widget 并入 + Keychain/App Group 归一
-4. 应用源 / 续签协调 / 数据迁移 / 多版本回归
+免电脑安装用的静态引擎在 `bootstrap-engine/`，锁定 isideload 0.5.2 / idevice 0.1.68，CI 构建前会跑自检：
 
-## 签名密钥（CI Secrets）
+```bash
+cd bootstrap-engine
+./check-build.sh              # lock 一致性 + 精确版本 + 编译可行性
+./check-build.sh --lock-only  # CI 用，跳过编译
+```
 
-| Secret | 用途 |
-|---|---|
-| `SIGNING_CERT_P12` | 签名证书（base64） |
-| `SIGNING_CERT_PASSWORD` | p12 密码 |
-| `PROVISIONING_PROFILE` | 描述文件（base64） |
+---
 
-签名步骤**只在 release / 手动勾选时运行**，PR 触碰不到 secrets。
+## 🧬 开源血缘
+
+TreeNB 是站在这些项目的肩膀上的，代码与思路来源如下：
+
+| 项目 | 作用 | 许可证 |
+|---|---|---|
+| [openSSS](https://github.com/SheldonJoO/openSSS) | 签名/续签内核、Anisette、JIT、中文界面基底 | AGPLv3 |
+| [SideStore](https://github.com/SideStore/SideStore) | openSSS 的上游：手机端签名与 Anisette 地基 | AGPLv3 |
+| [AltStore](https://github.com/rileytestut/AltStore) | 更上游的原版：应用模型、应用源、AltSign | AGPLv3 |
+| [TreeNewBee / LiveContainer](https://github.com/SheldonJoO/TreeNewBee) | 多 App 容器与翻译层 | — |
+| [isideload](https://github.com/nab138/isideload) | 引擎侧 Apple ID 认证 / 签名 / 安装的 Rust 实现 | MIT |
+| [idevice](https://github.com/jkcoxson/idevice) | 设备配对 / RSD 隧道 / 安装 | MIT |
+| Open Minis | iOS 上跑 aarch64 Linux 的 shell，免电脑安装的执行环境 | — |
+
+本项目以 **AGPL-3.0** 发布。上游的 LICENSE、版权头与署名全部保留，修改处按 AGPLv3 要求标注。
+
+---
+
+## 🙏 致谢
+
+**特别鸣谢 [SideInstaller](https://github.com/FrizzleM/SideInstaller)（FrizzleM）** —— TreeNB 的**免电脑首次安装**整体思路（终端拉起本地网页、网页登录 Apple ID、网页自配对）借鉴自该项目。TreeNB 未引入其任何代码，仅受其设计思路启发，在此单独重点致敬。
+
+同时感谢整个开源侧载生态：Riley Testut（AltStore 原作者，一切的起点）、SideStore 全体贡献者、nab138（isideload / iloader）、jkcoxson（idevice / minimuxer），以及 openSSS、LiveContainer、TreeNewBee 的维护与贡献者。没有他们的工作，就没有 TreeNB。
+
+---
 
 ## 许可证
 
-AGPL-3.0（与 openSSS / TreeNewBee 一致）。
+AGPL-3.0（与 openSSS / SideStore / AltStore 一致）。

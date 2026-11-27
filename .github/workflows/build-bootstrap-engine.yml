@@ -1,0 +1,54 @@
+name: Build TreeNB bootstrap engine (aarch64 static ELF)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "bootstrap-engine/**"
+      - ".github/workflows/build-bootstrap-engine.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            bootstrap-engine/target
+          key: bootstrap-engine-${{ runner.os }}-${{ hashFiles('bootstrap-engine/Cargo.lock') }}
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+
+      - name: Check lock consistency & version pin
+        working-directory: bootstrap-engine
+        run: bash check-build.sh --lock-only
+
+      - name: Build static aarch64 ELF
+        working-directory: bootstrap-engine
+        run: cross build --release --locked --target aarch64-unknown-linux-musl
+
+      - name: Inspect binary
+        working-directory: bootstrap-engine
+        run: |
+          BIN=target/aarch64-unknown-linux-musl/release/treenb-bootstrap
+          ls -lh "$BIN"
+          file "$BIN" || true
+          sha256sum "$BIN"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: treenb-bootstrap-aarch64
+          path: bootstrap-engine/target/aarch64-unknown-linux-musl/release/treenb-bootstrap
+          if-no-files-found: error

@@ -19,6 +19,9 @@ struct ContainerRootView: View {
     @State private var showImporter = false
     @State private var showWidgetSettings = false
     @State private var showCertificate = false
+    @State private var showImportMenu = false
+    @State private var showAPK = false
+    @State private var showBootstrap = false
 
     var body: some View {
         AdaptiveNavigation {
@@ -72,17 +75,23 @@ struct ContainerRootView: View {
                     .accessibilityLabel("Spike 自检")
                     #endif
                     SwiftUI.Button {
+                        showBootstrap = true
+                    } label: {
+                        Image(systemName: "wand.and.stars")
+                    }
+                    .accessibilityLabel("一键自举中心")
+                    SwiftUI.Button {
                         showCertificate = true
                     } label: {
                         Image(systemName: "key.fill")
                     }
                     .accessibilityLabel("无 JIT 证书设置")
                     SwiftUI.Button {
-                        showImporter = true
+                        showImportMenu = true
                     } label: {
                         Image(systemName: "plus.circle.fill")
                     }
-                    .accessibilityLabel("导入 IPA")
+                    .accessibilityLabel("安装应用")
                 }
             }
             .sheet(isPresented: $showImporter) {
@@ -112,6 +121,26 @@ struct ContainerRootView: View {
                             }
                         }
                 }
+            }
+            .sheet(isPresented: $showAPK) {
+                AdaptiveNavigation {
+                    HuskyAPKView()
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                SwiftUI.Button("完成") { showAPK = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $showBootstrap) {
+                AdaptiveNavigation {
+                    BootstrapCenterView()
+                }
+            }
+            .confirmationDialog("选择要安装的应用类型", isPresented: $showImportMenu, titleVisibility: .visible) {
+                SwiftUI.Button("安装 IPA（iOS 应用）") { showImporter = true }
+                SwiftUI.Button("安装安卓 APK") { showAPK = true }
+                SwiftUI.Button("取消", role: .cancel) {}
             }
             .alert("容器错误", isPresented: Binding(
                 get: { model.lastError != nil },
@@ -272,6 +301,18 @@ private struct GuestTile: View {
                     .foregroundStyle(.primary)
             }
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 6)
+            // iOS27 玻璃拟态：宫格 tile 用超薄材质 + 高光描边（iOS15+ 兼容）。
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.6)
+                    )
+                    .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 3)
+            )
         }
         .buttonStyle(.plain)
         .task {

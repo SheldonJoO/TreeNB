@@ -12,6 +12,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SSS="$ROOT/upstream/openSSS"
 LC="$ROOT/upstream/TreeNewBee"
 
+# 共享路径变量（`set -u` 下必须先定义再用）。历史上散落在各段重复定义，
+# B1g5/B1g7 的闪屏补丁位于 B1c 之前，故统一提到顶部，避免 unbound variable。
+SCENEDELEGATE="$SSS/AltStore/SceneDelegate.swift"
+LAUNCHVC="$SSS/AltStore/LaunchViewController.swift"
+
 log()  { printf '\033[1;34m[patch]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m[ ok ]\033[0m %s\n' "$*"; }
@@ -33,6 +38,77 @@ else
   echo "FATAL[A0]: 缺少 config/AppIcon 或上游 appiconset，无法铺图标" >&2
   exit 2
 fi
+
+# ---------------------------------------------------------------------------
+# A0.1 AppLogo：关于页 / 启动页/Widget 兜底用的图片资源。
+# 上游 AppLogo 是 openSSS 的 "oS" 图标，用户要求换成同一张电路树图。
+# ---------------------------------------------------------------------------
+log "A0.1 铺 TreeNB AppLogo（关于页 + 启动页）"
+APPLOGO="$SSS/AltStore/Resources/Assets.xcassets/AppLogo.imageset"
+WIDGET_APPLOGO="$SSS/AltWidget/Assets.xcassets/AppLogo.imageset"
+if [ -d "$ROOT/config/AppLogo" ] && [ -d "$APPLOGO" ]; then
+  cp "$ROOT/config/AppLogo/"*.png "$APPLOGO/"
+  [ -d "$WIDGET_APPLOGO" ] && cp "$ROOT/config/AppLogo/"*.png "$WIDGET_APPLOGO/"
+  ok "AppLogo 已铺（$(ls "$ROOT/config/AppLogo/"*.png | wc -l | tr -d ' ') 个尺寸，主 App + Widget）"
+else
+  echo "FATAL[A0.1]: 缺少 config/AppLogo 或上游 AppLogo.imageset" >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# A0.2 版本号按构建时间戳递增。
+# 用户约定：短版本 1.0.YYMMDD（如 1.0.261125），构建号 YYYYMMDDHHMM。
+# 直接写进 Info.plist，避免依赖 xcodebuild 命令行覆盖（会冲掉 target 级设置）。
+# ---------------------------------------------------------------------------
+log "A0.2 写入时间戳版本号"
+TNB_STAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
+TNB_SHORT="1.0.${TNB_STAMP:2:6}"
+python3 - "$ROOT/config/TreeNB-Info.plist" "$ROOT/config/AltWidget-Info.plist" "$ROOT/config/TreeNB.xcconfig" "$ROOT/project.yml" "$TNB_SHORT" "$TNB_STAMP" <<'PY'
+import re, sys
+short, build = sys.argv[5], sys.argv[6]
+for path in sys.argv[1:3]:
+    s = open(path, encoding='utf-8').read()
+    s = re.sub(r'(<key>CFBundleShortVersionString</key>\s*<string>).*?(</string>)',
+               lambda m: m.group(1) + short + m.group(2), s, count=1)
+    s = re.sub(r'(<key>CFBundleVersion</key>\s*<string>).*?(</string>)',
+               lambda m: m.group(1) + build + m.group(2), s, count=1)
+    open(path, 'w', encoding='utf-8').write(s)
+
+# xcodegen 会把 Info.plist 重新写成 $(MARKETING_VERSION) 占位符，
+# 所以必须在 xcconfig 里也写死构建设置，archive 时才会真正替换。
+xcconfig = sys.argv[3]
+s = open(xcconfig, encoding='utf-8').read()
+s = re.sub(r'(?m)^MARKETING_VERSION\s*=.*$', '', s)
+s = re.sub(r'(?m)^CURRENT_PROJECT_VERSION\s*=.*$', '', s)
+s = s.rstrip() + f"\n\n// TreeNB 时间戳版本号（patch_upstream.sh A0.2 每次构建写入）\nMARKETING_VERSION = {short}\nCURRENT_PROJECT_VERSION = {build}\n"
+open(xcconfig, 'w', encoding='utf-8').write(s)
+
+# 决定性方案：xcodegen 生成的 pbxproj 里有 target 级 MARKETING_VERSION=1.0，
+# 优先级高于 xcconfig，导致 archive 仍写 1.0。直接把字面量写进
+# project.yml 的 TreeNB target info.properties，xcodegen 会原样写进生成 plist。
+project = sys.argv[4]
+s = open(project, encoding='utf-8').read()
+# 幂等：先移除上一次注入的行
+s = re.sub(r'(?m)^.*TNB_VERSION_STAMP.*\n', '', s)
+marker = "  TreeNB:\n"
+pos = s.find(marker)
+if pos < 0:
+    raise SystemExit('FATAL[A0.2]: project.yml 缺少 TreeNB target')
+ipos = s.find("    info:\n", pos)
+if ipos < 0:
+    raise SystemExit('FATAL[A0.2]: TreeNB target 缺少 info 段')
+ppos = s.find("      properties:\n", ipos)
+if ppos < 0:
+    raise SystemExit('FATAL[A0.2]: TreeNB target 缺少 info.properties')
+ins = ppos + len("      properties:\n")
+injected = (
+    f'        CFBundleShortVersionString: "{short}" # TNB_VERSION_STAMP\n'
+    f'        CFBundleVersion: "{build}" # TNB_VERSION_STAMP\n'
+)
+s = s[:ins] + injected + s[ins:]
+open(project, 'w', encoding='utf-8').write(s)
+PY
+ok "版本号已写：$TNB_SHORT ($TNB_STAMP)"
 
 # ---------------------------------------------------------------------------
 # A. TreeNewBee 侧：删除 openSSS-as-guest 的跳转分支
@@ -250,6 +326,40 @@ else:
         s = s.replace(old, new, 1)
         open(p, 'w', encoding='utf-8').write(s)
         print('  LCBootstrap.m: Tweaks 目录/软链自愈已注入')
+PY
+fi
+
+# A4f. 上游 LCBootstrap.m 在 iOS 26+ 硬性禁止纯 JIT 模式（两处 @available(iOS 26.0,*)
+# 直接 return "JITLess mode is required"）。但 dyld_bypass_validation.m 的
+# init_bypassDyldLibValidation() 在 iOS 27 代码里仍在调用，说明 JIT 绕过机制仍在。
+# TreeNB 目标设备 iOS 27 + StikDebug 可开 JIT，故放开这两处限制，让有 JIT 时
+# 走经典 JIT 路径（checkJITEnabled → init_bypassDyldLibValidation → dlopen guest）。
+# 无 JIT 时下面原本的 checkJITEnabled 循环仍会兜底报错，不会静默失败。
+if [ -f "$LC/LiveContainer/LCBootstrap.m" ]; then
+  python3 - "$LC/LiveContainer/LCBootstrap.m" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+marker = 'TREENB_ALLOW_JIT_IOS26'
+if marker in s:
+    print('  LCBootstrap.m: iOS26+ JIT 解禁已注入（幂等）')
+else:
+    block = '''        if(@available(iOS 26.0 ,*))  {
+            return @"JITLess mode is required since iOS 26. Please set it up in settings. \\nPlease go to TreeNewBee settings -> tap \\"Import Certificate from openSSS\\" / \\"Import Certificate\\"";
+        }
+'''
+    if block not in s:
+        print('  LCBootstrap.m: 未找到 iOS26 限制块（可能上游已改），跳过')
+    else:
+        repl = '''        // TREENB_ALLOW_JIT_IOS26: 放开上游 iOS26+ 强制 JITLess 限制。
+        // 有 JIT（StikDebug）时走经典 JIT 路径；无 JIT 时下方循环仍会兜底报错。
+#if 0
+''' + block + '''#endif
+'''
+        n = s.count(block)
+        s = s.replace(block, repl)
+        open(p, 'w', encoding='utf-8').write(s)
+        print('  LCBootstrap.m: 已注释 %d 处 iOS26+ JIT 限制' % n)
 PY
 fi
 
@@ -913,9 +1023,9 @@ patch(about_path, [
 patch(profile_path, [
     ('title: NSLocalizedString("About openSSS", comment: ""),',
      'title: "关于 TreeNB Ⅱ",'),
-    # "我的"页帮助与支持区的"支持 openSSS" → TreeNB Ⅱ
+    # "我的"页帮助与支持区的"支持 openSSS" → 支持与动力
     ('title: NSLocalizedString("Support openSSS", comment: ""))',
-     'title: "支持 TreeNB Ⅱ")'),
+     'title: "支持与动力")'),
     # 过期提醒通知里的 openSSS 品牌
     ('content.title = "openSSS"', 'content.title = "TreeNB Ⅱ"'),
 ], '关于 TreeNB Ⅱ')
@@ -930,11 +1040,175 @@ PY
     || { echo "FATAL[B1g]: 关于页品牌归一失败" >&2; exit 2; }
   grep -q 'navigationItem.title = "🌲TreeNB Ⅱ"' "$APPSVC" \
     || { echo "FATAL[B1g]: 应用页大标题品牌归一失败" >&2; exit 2; }
-  grep -q 'title: "支持 TreeNB Ⅱ"' "$PROFILE" \
-    || { echo "FATAL[B1g]: 支持入口品牌归一失败" >&2; exit 2; }
+  grep -q 'title: "支持与动力"' "$PROFILE" \
+    || { echo "FATAL[B1g]: 支持入口文案失败" >&2; exit 2; }
   ok "品牌归一：关于页 / 应用页 / 支持入口 → TreeNB Ⅱ 已校验"
 else
   warn "未找到 $ABOUT，跳过关于页品牌归一"
+fi
+
+# B1g2. 界面文案品牌归一（本地化 .strings / .storyboard）
+# 背景：B1g 只改了 Swift 代码里的字符串字面量，storyboard 与 .strings 里的
+#       "欢迎使用 openSSS。" 等文案原样显示（真机登录页截图可见）。
+#       upstream 由 prepare_dependencies.sh 每次重拉且被 gitignore，必须在此持久修补。
+# 原则：只改「产品自称」的可界面文案；致谢/版权/License 里的 openSSS 一律保留。
+AUTH_STRINGS="$SSS/AltStore/zh-Hans.lproj/Authentication.strings"
+AUTH_STORY="$SSS/AltStore/Authentication/Authentication.storyboard"
+LOCAL_STRINGS="$SSS/AltStore/zh-Hans.lproj/Localizable.strings"
+SHELL_AUTH_SWIFT="$SSS/AltStore/Shell/ShellAuthenticationViewController.swift"
+if [ -f "$AUTH_STRINGS" ] || [ -f "$AUTH_STORY" ] || [ -f "$LOCAL_STRINGS" ] || [ -f "$SHELL_AUTH_SWIFT" ]; then
+  python3 - "$AUTH_STRINGS" "$AUTH_STORY" "$LOCAL_STRINGS" "$SHELL_AUTH_SWIFT" <<'PY'
+import sys
+auth_strings, auth_story, local_strings, shell_auth_swift = sys.argv[1:5]
+
+# 产品自称 → 🌲树应用。仅限引导/登录/VPN/重签等界面可见文案。
+# 注意：不替换致谢、版权、"openSSS Team"、GitHub 链接、"Stand with openSSS" 等。
+reps = [
+    ('欢迎使用 openSSS。', '欢迎使用 🌲树应用。'),
+    ('欢迎使用 openSSS', '欢迎使用 🌲树应用'),
+    ('Welcome to openSSS.', 'Welcome to 🌲TreeNB.'),
+    ('Welcome to openSSS', 'Welcome to 🌲TreeNB'),
+    ('启用 LocalDevVPN，随时随地使用 openSSS。', '启用 LocalDevVPN，随时随地使用 🌲树应用。'),
+    ('重签 openSSS', '重签 🌲树应用'),
+    ('让 openSSS 在你的设备后台保持运行。', '让 🌲树应用 在你的设备后台保持运行。'),
+    ('连接 openSSS VPN 后，应用会在后台自动刷新！', '连接 🌲树应用 VPN 后，应用会在后台自动刷新！'),
+    ('直接从 openSSS 浏览并下载应用。', '直接从 🌲树应用 浏览并下载应用。'),
+    ('启动 openSSS', '启动 🌲树应用'),
+]
+changed = []
+for path in (auth_strings, auth_story, local_strings, shell_auth_swift):
+    try:
+        s = open(path, encoding='utf-8').read()
+    except FileNotFoundError:
+        continue
+    o = s
+    for a, b in reps:
+        s = s.replace(a, b)
+    if s != o:
+        open(path, 'w', encoding='utf-8').write(s)
+        changed.append(path.split('/')[-1])
+print('  界面文案品牌归一：' + ('、'.join(changed) if changed else '无需改动'))
+PY
+  # 校验：登录页大标题必须已是 TreeNB 品牌，且不得残留旧文案。
+  # 真机反馈「Welcome to openSSS.」英文源自 ShellAuthenticationViewController 的
+  # NSLocalizedString key（.strings 只改 value 无效），故 Swift 源码 key 也必须归一。
+  if grep -q '欢迎使用 openSSS。' "$AUTH_STRINGS" 2>/dev/null \
+     || grep -q '欢迎使用 openSSS。' "$AUTH_STORY" 2>/dev/null \
+     || grep -q 'Welcome to openSSS' "$SHELL_AUTH_SWIFT" 2>/dev/null \
+     || grep -q '"Welcome to openSSS' "$LOCAL_STRINGS" 2>/dev/null; then
+    echo "FATAL[B1g2]: 登录页仍残留 openSSS 品牌文案" >&2
+    exit 2
+  fi
+  if grep -q 'EI2-V3-zQZ.text" = "欢迎使用 🌲树应用。' "$AUTH_STRINGS" 2>/dev/null \
+     || grep -q 'text="欢迎使用 🌲树应用。"' "$AUTH_STORY" 2>/dev/null; then
+    ok "界面文案品牌归一：登录页 / 引导页 openSSS → 🌲树应用 已校验（致谢保留上游）"
+  else
+    warn "界面文案品牌归一：未找到预期的登录页文案，请人工复核"
+  fi
+fi
+
+
+# B1g5a（已移除，2026-11-27 11:44）。
+#   真机对照：0419 包（本段尚未引入）完全全屏，0828 起每次都会上下各 15.5% 黑边。
+#   历史补丁 tnbForceFullScreen 把 SceneDelegate 所有 window/root view 的 frame
+#   强行写成 scene.screen.bounds，正是把界面框进非全屏尺寸的可疑来源。
+#   整合版恢复 0419 行为：不再注入任何 window/root frame 强制代码。
+#   （保留 B1j 防闪退、B1k 仅文案归一、玻璃 v3。）
+
+# B1g5~B1g9（已移除，2026-11-27 12:25）。
+#   真机对照：只有 0419（这些遮罩/启动屏补丁尚未引入）是全屏且能正常进主界面。
+#   0419 之后新增的 TNBFlickerGuard.cover() 额外 window、品牌 LaunchScreen、
+#   TreeLaunchOverlay 启动遮罩，都会往场景里插入非全屏 window/快照层。
+#   本整合版回退到 0419 的窗口/启动屏行为，只保留玻璃 v3 与 B1j 防闪退。
+
+# B1g4. 闪屏治本：ShellTheme.applyAppearance(to:) 原本每次都无条件写
+#       window.overrideUserInterfaceStyle，即使值没变也会触发整棵视图树的 trait 刷新/重绘，
+#       从后台切回前台时肉眼可见「闪一下」。改成只在值真的变化时赋值（幂等短路）。
+THEME_SWIFT="$SSS/AltStore/Shell/ShellTheme.swift"
+if [ -f "$THEME_SWIFT" ]; then
+  python3 - "$THEME_SWIFT" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+old = '''    static func applyAppearance(to window: UIWindow?)
+    {
+        switch appearance
+        {
+        case .system: window?.overrideUserInterfaceStyle = .unspecified
+        case .light: window?.overrideUserInterfaceStyle = .light
+        case .dark: window?.overrideUserInterfaceStyle = .dark
+        }
+    }'''
+new = '''    static func applyAppearance(to window: UIWindow?)
+    {
+        guard let window = window else { return }
+        let target: UIUserInterfaceStyle
+        switch appearance
+        {
+        case .system: target = .unspecified
+        case .light: target = .light
+        case .dark: target = .dark
+        }
+        // Only assign when the value actually changes: writing the same
+        // overrideUserInterfaceStyle still forces a full traitCollection
+        // rebuild of the window's view tree, which shows up as a visible
+        // flash when returning to the foreground (TreeNB anti-flicker).
+        if window.overrideUserInterfaceStyle != target {
+            window.overrideUserInterfaceStyle = target
+        }
+    }'''
+if old in s:
+    s = s.replace(old, new)
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  ShellTheme.swift: applyAppearance 改为幂等短路（消除切前台重绘闪屏）')
+else:
+    print('  ShellTheme.swift: applyAppearance 已是幂等版（幂等）')
+PY
+  grep -q 'Only assign when the value actually changes' "$THEME_SWIFT" \
+    || { echo "FATAL[B1g4]: 主题幂等短路注入失败" >&2; exit 2; }
+  ok "闪屏治本：主题应用改为幂等，避免无变化的 trait 重绘"
+fi
+
+# B1g3. 来源加载提示：上游 Toast 的 detailText 传 nil，用户只看到「部分来源无法加载」
+#       却不知道是哪个/为什么。改为显示错误摘要，并把文案改得更可操作（点击查看）。
+LAUNCHVC="$SSS/AltStore/LaunchViewController.swift"
+if [ -f "$LAUNCHVC" ]; then
+  python3 - "$LAUNCHVC" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+# detailText 用已经算好的 errorDesc（截断，避免 Toast 过长）。
+s = s.replace(
+    'let toastView = ToastView(text: NSLocalizedString("Some sources were unable to load", comment: ""), detailText: nil)',
+    'let shortDetail = String(errorDesc.prefix(80))\n            let toastView = ToastView(text: NSLocalizedString("Some sources were unable to load", comment: ""), detailText: shortDetail)')
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  LaunchViewController.swift: 来源加载失败 Toast 已补充错误摘要')
+else:
+    print('  LaunchViewController.swift: 来源 Toast 已是补充版（幂等）')
+PY
+  grep -q 'detailText: shortDetail' "$LAUNCHVC" \
+    || { echo "FATAL[B1g3]: 来源 Toast 补充失败" >&2; exit 2; }
+  ok "来源加载提示：已补充错误摘要（点击 Toast 仍可进入来源页）"
+fi
+
+# 对应的中文文案：明确告知「点击查看」。
+SRC_STRINGS="$SSS/AltStore/zh-Hans.lproj/Localizable.strings"
+if [ -f "$SRC_STRINGS" ]; then
+  python3 - "$SRC_STRINGS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+o = s
+s = s.replace('"Some sources were unable to load" = "部分来源无法加载";',
+              '"Some sources were unable to load" = "部分来源无法加载（点击查看）";')
+if s != o:
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  来源 Toast 文案已补充「点击查看」')
+PY
 fi
 
 # B1h. 虚拟定位：自 A6 起 IDevice 用带 location_simulation 的自编译产物，
@@ -967,6 +1241,368 @@ PY
 else
   warn "未找到 $LOCVIEW，跳过虚拟定位文案检查"
 fi
+
+# B1i. 定位状态文案修正：connected 只表示 DVT 会话是否存在，不表示设备链路断开。
+#      首次进入页面尚未开始模拟时 connected == false，旧代码显示「连接失败」，
+#      把「未开始」误报成故障。这里统一改为「未开始」。
+if [ -f "$LOCVIEW" ]; then
+  python3 - "$LOCVIEW" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '''        if !status.connected
+        {
+            return NSLocalizedString("Connection Failed", comment: "")
+        }
+        return NSLocalizedString("Not Started", comment: "")'''
+new = '''        // connected 只表示本地 DVT 定位会话是否存在（未开始 / 已停止时为 false），
+        // 不代表设备链路断开；旧文案把空闲状态误报成「连接失败」。
+        return NSLocalizedString("Not Started", comment: "")'''
+if old in s:
+    s = s.replace(old, new)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  定位状态文案：空闲不再误报「连接失败」')
+elif '旧文案把空闲状态误报成' in s:
+    print('  定位状态文案已是新版本（无需改）')
+else:
+    raise SystemExit('FATAL[B1i]: 未定位到 statusText 的 Connection Failed 分支')
+PY
+  grep -q '旧文案把空闲状态误报成' "$LOCVIEW" \
+    || { echo "FATAL[B1i]: 定位状态文案修正失败" >&2; exit 2; }
+  ok "定位空闲状态文案已校验（未开始，不再误报连接失败）"
+fi
+
+# B1j. 启动期强制设备往返 → 延后到用时（修 LocalDevVPN 开着时"打开就闪退"）
+# ---------------------------------------------------------------------------
+# 真机 .ips（2026-11-27 09:05:36，UUID F92EDE3F… 与 0836 包一致）证据：
+#   EXC_BAD_ACCESS / SIGSEGV，fault addr 0xfffffffffffffff0，栈顶 _platform_strlen，
+#   崩溃队列 com.apple.root.default-qos（= Task.detached 启动序列），
+#   调用帧 1203万~1709万偏移落在 DeviceGatewayAPI(Minimuxer Swift FFI)+Rust 静态库段。
+# 机理：AppBootManager.startMinimuxer() 启动期调 fetchUDID(forceLive: true)，
+#   强制真实设备往返。LocalDevVPN 开着 → 10.7.0.1/32 路由生效 → minimuxer 进入
+#   localVPN 隧道枚举/DVT 握手路径，从 Swift/Rust FFI 读到跨线程的 nil String →
+#   strlen(NULL) → 崩。VPN 关着时该路径走 notReachable 被 do/catch 兜住 → 不崩。
+# 修法：启动期的这次 UDID 在线校验改成 no-op（配对文件存在即视为已配对）。真实的
+#   设备在线校验并未丢失——它推迟到用户首次用定位/签名时，走
+#   ensureMinimuxerReady() → isReady(withNetworkCheck) 完整检查。这样启动完全不
+#   触发强制设备往返，VPN 常开也能正常打开 App，功能保留。
+BOOTMGR="$SSS/SideStore/AppBootManager.swift"
+if [ -f "$BOOTMGR" ]; then
+  python3 - "$BOOTMGR" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+
+old = '''        // Validate the pairing by trying to fetch the UDID
+        do {
+            debugLog("[AppBootManager] startMinimuxer(): Minimuxer fetchUDID() based connection starting...")
+            let deviceUDID = try await fetchUDID(forceLive: true)
+            debugLog("[AppBootManager] startMinimuxer(): Minimuxer fetchUDID() based connection test SUCCEEDED. UDID: \\(deviceUDID)")
+            self.needsPairingPrompt = false
+        } catch {'''
+new = '''        // TreeNB[B1j]: 启动期不做强制设备往返。LocalDevVPN 开着时，
+        // fetchUDID(forceLive:true) 会进入 minimuxer FFI 的 nil String → strlen(NULL)
+        // → SIGSEGV（真机 .ips 2026-11-27 09:05 已确认）。
+        // 这里整个校验块改成 no-op：配对文件存在即视为已配对。真实的设备在线校验
+        // 延后到用户首次用定位/签名时，走 ensureMinimuxerReady() → isReady(withNetworkCheck)。
+        do {
+            debugLog("[AppBootManager] startMinimuxer(): TreeNB skip boot-time live UDID check (defer to first use)")
+            self.needsPairingPrompt = false
+        } catch {'''
+
+if old in s:
+    s = s.replace(old, new, 1)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  AppBootManager.swift: 启动期强制设备校验改为 no-op（在线校验延后到用时）')
+elif 'TreeNB[B1j]' in s:
+    print('  AppBootManager.swift: B1j 已就位（幂等）')
+else:
+    raise SystemExit('FATAL[B1j]: 未定位到启动期 fetchUDID(forceLive: true) 锚点')
+PY
+  grep -q 'TreeNB\[B1j\]' "$BOOTMGR" \
+    || { echo "FATAL[B1j]: 启动期设备往返修复未写入" >&2; exit 2; }
+  ok "启动期设备往返修复已校验（缓存优先，VPN 常开不触发 FFI 强制往返）"
+else
+  echo "FATAL[B1j]: 缺少 $BOOTMGR，无法修复启动期设备往返" >&2
+  exit 2
+fi
+
+# B1n. FFI 野指针防御 —— 修 LocalDevVPN 开启后「能操作几下才闪退」
+# ---------------------------------------------------------------------------
+# 真机 .ips（2026-11-27 09:05:36，slice_uuid F92EDE3F… 与 0836 包一致）：
+#   EXC_BAD_ACCESS / SIGSEGV，KERN_INVALID_ADDRESS at 0xfffffffffffffff0 (-16)，
+#   栈顶 libsystem_platform _platform_strlen + 4，
+#   崩溃队列 com.apple.root.default-qos（= FFIDispatcher 的 DispatchQueue.global().async）。
+# 反汇编 0836 主二进制（UUID 精确匹配）定位：
+#   0x100e647cc 是 strlen 包装（mov x19,x0 → bl strlen → add x1,x0,#1），
+#   frame2 0x100ed2818 第一条指令就 bl 到它；frame4 起落在 DeviceGatewayAPI Swift 段。
+#   → FFI 返回的 C 字符串指针是野指针 -16；Swift `if let` 只能拦 nil，
+#     拦不住 -16，String(cString:) 直接 strlen → 崩；随后的 free(ptr) 同样会崩。
+# 为什么 B1j 不够（本次真机反馈「不是马上闪退，能操作几下」）：
+#   B1j 只 no-op 了 AppBootManager:79 启动期那次 fetchUDID(forceLive:true)。
+#   但 MinimuxerImpl.isReady():195 内部自己还会 fetchUDID()，所有运行期操作
+#   （我的应用 onAppear / 健康检查 / 连接配置保存 / 后台刷新）经
+#   ensureMinimuxerReady → isReady 都会走到；VPN 开着时 utun + 10.7.0.1 前置
+#   检查全过才到 :195，VPN 关着则提前 .noVPN 返回 —— 这就是「开 VPN 操作几下
+#   才崩、关 VPN 不崩」的原因。
+# 修法（治本 / 不动流程 / 不动 UI）：在 IdeviceGateway + LibimobiledeviceGateway
+#   注入 tnbSafeCString / tnbSafeUTF8 / tnbFree，对所有 FFI 返回指针先做用户态
+#   地址合法性校验（拦 NULL 与 0xFFFFFFFF… 高位垃圾地址），合法指针原样走
+#   String(cString:) 与 free()。功能完全保留。
+#   ★ 玻璃 v3 与 0419 全屏启动链一行不动。
+IDVG="$SSS/Dependencies/minimuxer/DeviceGateway/idevice/IdeviceGateway.swift"
+LIBG="$SSS/Dependencies/minimuxer/DeviceGateway/libimobiledevice/LibimobiledeviceGateway.swift"
+for GW in "$IDVG" "$LIBG"; do
+  [ -f "$GW" ] || { echo "FATAL[B1n]: 缺少 $GW" >&2; exit 2; }
+done
+python3 - "$IDVG" "$LIBG" <<'PYB1N'
+import sys, re
+
+helper = r'''
+
+// ===== TreeNB[B1n] FFI 野指针防御（修 LocalDevVPN 延迟闪退）=====
+// 真机 .ips: strlen 收到 0xfffffffffffffff0 (-16) → SIGSEGV。
+// Rust FFI 跨线程返回的 C 字符串指针可能是野指针；Swift `if let` 只能拦 nil，
+// 拦不住 -16。这里统一做用户态地址校验后再交给 String(cString:) / free()。
+@inline(__always)
+private func tnbPtrOK<T>(_ p: UnsafePointer<T>?) -> Bool {
+    guard let p = p else { return false }
+    let a = UInt(bitPattern: p)
+    guard a > 0x1000 && a < 0x0000_8000_0000_0000 else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_V1 rejected invalid C string pointer \(a)")
+        return false
+    }
+    return true
+}
+@inline(__always)
+private func tnbPtrOK<T>(_ p: UnsafeMutablePointer<T>?) -> Bool {
+    guard let p = p else { return false }
+    let a = UInt(bitPattern: p)
+    guard a > 0x1000 && a < 0x0000_8000_0000_0000 else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_V1 rejected invalid C string pointer \(a)")
+        return false
+    }
+    return true
+}
+@inline(__always)
+private func tnbSafeCString(_ p: UnsafePointer<CChar>?) -> String {
+    guard tnbPtrOK(p) else { return "" }
+    return String(cString: p!)
+}
+@inline(__always)
+private func tnbSafeCString(_ p: UnsafeMutablePointer<CChar>?) -> String {
+    guard tnbPtrOK(p) else { return "" }
+    return String(cString: p!)
+}
+@inline(__always)
+private func tnbSafeCString(_ buf: [CChar]) -> String {
+    return buf.withUnsafeBufferPointer { tnbSafeCString($0.baseAddress) }
+}
+@inline(__always)
+private func tnbSafeUTF8(_ p: UnsafePointer<CChar>?) -> String? {
+    guard tnbPtrOK(p) else { return nil }
+    return String(validatingUTF8: p!)
+}
+@inline(__always)
+private func tnbSafeUTF8(_ p: UnsafeMutablePointer<CChar>?) -> String? {
+    guard tnbPtrOK(p) else { return nil }
+    return String(validatingUTF8: p!)
+}
+@inline(__always)
+private func tnbSafeUTF8(_ buf: [CChar]) -> String? {
+    return buf.withUnsafeBufferPointer { tnbSafeUTF8($0.baseAddress) }
+}
+@inline(__always)
+private func tnbFree<T>(_ p: UnsafeMutablePointer<T>?) {
+    guard let q = p, tnbPtrOK(p) else { return }
+    free(UnsafeMutableRawPointer(q))
+}
+// installation_proxy_get_apps 的 outResult 是 UnsafeMutableRawPointer?，
+// 泛型版无法推导 T，必须单独重载（CI 45951137700 编译错误已验证）。
+@inline(__always)
+private func tnbFree(_ p: UnsafeMutableRawPointer?) {
+    guard let q = p else { return }
+    let a = UInt(bitPattern: q)
+    guard a > 0x1000 && a < 0x0000_8000_0000_0000 else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_V1 rejected invalid raw pointer \(a)")
+        return
+    }
+    free(q)
+}
+// ===== /TreeNB[B1n] =====
+'''
+
+def convert(src, prefix, replacement):
+    out, i = [], 0
+    while True:
+        j = src.find(prefix, i)
+        if j < 0:
+            out.append(src[i:]); break
+        out.append(src[i:j])
+        k, depth = j + len(prefix), 1
+        while k < len(src) and depth:
+            if src[k] == '(': depth += 1
+            elif src[k] == ')': depth -= 1
+            k += 1
+        expr = src[j + len(prefix):k - 1]
+        out.append(replacement + '(' + expr + ')')
+        i = k
+    return ''.join(out)
+
+for path in sys.argv[1:]:
+    s = open(path, encoding='utf-8').read()
+    if 'TreeNB[B1n]' in s:
+        print('  B1n already present:', path.split('/')[-1]); continue
+    n_cstr = s.count('String(cString: ')
+    n_utf8 = s.count('String(validatingUTF8: ')
+    n_free = len(re.findall(r'(?<![A-Za-z0-9_])free\(', s))
+    s = convert(s, 'String(cString: ', 'tnbSafeCString')
+    s = convert(s, 'String(validatingUTF8: ', 'tnbSafeUTF8')
+    s = re.sub(r'(?<![A-Za-z0-9_])free\(', 'tnbFree(', s)
+    s = s.rstrip() + '\n' + helper
+    open(path, 'w', encoding='utf-8').write(s)
+    print('  B1n patched %s: cString=%d validatingUTF8=%d free=%d'
+          % (path.split('/')[-1], n_cstr, n_utf8, n_free))
+PYB1N
+for GW in "$IDVG" "$LIBG"; do
+  grep -q 'tnbSafeCString' "$GW" || { echo "FATAL[B1n]: $GW 未注入安全转换" >&2; exit 2; }
+  grep -q 'tnbPtrOK' "$GW"      || { echo "FATAL[B1n]: $GW 未注入指针校验" >&2; exit 2; }
+  grep -q 'tnbFree' "$GW"       || { echo "FATAL[B1n]: $GW 未注入安全释放" >&2; exit 2; }
+done
+# helper 自身每个文件含 2 处 String(cString: p!)（那是校验通过后的最终安全转换），
+# 两个文件合计允许 4 处；超过即说明有业务调用没被替换。
+CSTR_LEFT=$(grep -cE 'String\(cString: ' "$IDVG" "$LIBG" | awk -F: '{s+=$2} END{print s+0}')
+[ "$CSTR_LEFT" -le 4 ] || { echo "FATAL[B1n]: 仍有 $CSTR_LEFT 处未保护的 String(cString:)" >&2; exit 2; }
+ok "B1n: FFI 野指针防御已注入（String(cString:)/validatingUTF8/free 全量保护）"
+
+# B1o. 品牌全量统一 —— openSSS → 🌲TreeNB（2026-11-27 真机截图反馈）
+# ---------------------------------------------------------------------------
+# 残留根因（此前只做白名单精确替换，漏改一大片）：
+#   ① .strings 是 UTF-8 文本 old-style plist（Xcode 打包时才转 binary plist），
+#      B1g2 只替换 8 条精确长句，剩下 106 条 value 里的 openSSS 全部原样；
+#   ② DonationViewController.swift:21 的页面标题用的还是
+#      NSLocalizedString("Support openSSS") —— B1g 只改了 ProfileViewController
+#      的「入口」title，没改「赞助页」自身 title（截图「支持 openSSS」来源）；
+#   ③ 系统设置 → 开发者模式里的 "Pair with openSSS" 是 iOS 按 Bonjour TXT
+#      "name" 生成的，来自 MinimuxerConstants.defaultHostName（注释明确写了
+#      「renaming only affects new pairings」，改名不影响配对文件身份）。
+# 原则：只改用户可见的「产品自称」；致谢/版权/链接/数据库名/资源名一律保留
+#   （openSSS Team、github.com/SheldonJoO/openSSS、SideStore、AltStore、
+#     AppConstants.Database.name、openSSS.conf 资源名均不动）。
+# 特别注意：只改 .strings 的 **value**，key 保持不变 —— 改 key 会让
+#   NSLocalizedString 找不到词条而直接把英文 key 显示出来（历史踩坑）。
+python3 - "$SSS" <<'PYB1O'
+import sys, re, glob, os
+root = sys.argv[1]
+
+PROTECT = {
+    'openSSS.conf': '\x01',
+    'openSSS Team': '\x02',
+    'github.com/SheldonJoO/openSSS': '\x03',
+    'SideStore': '\x04',
+    'AltStore': '\x05',
+}
+KEY_OVERRIDE = {
+    'Support openSSS': '支持与动力',      # 用户明确指定
+    'About openSSS': '关于 🌲TreeNB',
+    'Open openSSS': '打开 🌲TreeNB',
+    'openSSS': '🌲TreeNB',                # 通知标题 / 二维码页小字
+}
+line_re = re.compile(r'^(\s*"((?:[^"\\]|\\.)*)"\s*=\s*")((?:[^"\\]|\\.)*)("\s*;.*)$', re.M)
+
+def brand(key, val):
+    v = val
+    for k, t in PROTECT.items():
+        v = v.replace(k, t)
+    v = v.replace('openSSS', '🌲TreeNB')
+    for k, t in PROTECT.items():
+        v = v.replace(t, k)
+    return KEY_OVERRIDE.get(key, v)
+
+changed_files, changed_vals = 0, 0
+for p in glob.glob(root + '/**/*.strings', recursive=True):
+    try:
+        s = open(p, encoding='utf-8').read()
+    except (UnicodeDecodeError, FileNotFoundError):
+        continue
+    hits = [m for m in line_re.finditer(s) if 'openSSS' in m.group(3) or m.group(2) in KEY_OVERRIDE]
+    if not hits:
+        continue
+    s2 = line_re.sub(lambda m: m.group(1) + brand(m.group(2), m.group(3)) + m.group(4), s)
+    if s2 != s:
+        open(p, 'w', encoding='utf-8').write(s2)
+        changed_files += 1
+        changed_vals += len(hits)
+print('  B1o strings: %d files, %d values rebranded' % (changed_files, changed_vals))
+
+# Swift 侧：页面标题 / 主题预览 / 启动屏兜底 / 配对广播名
+reps = [
+    (root + '/AltStore/Shell/DonationViewController.swift',
+     'title = NSLocalizedString("Support openSSS", comment: "")',
+     'title = "支持与动力"'),
+    (root + '/SideStore/Views/Settings/Advanced/UserCustomizations/ThemePickerView.swift',
+     'Text("openSSS")', 'Text("🌲TreeNB")'),
+    (root + '/SideStore/Views/SplashView.swift',
+     '?? "openSSS"', '?? "🌲TreeNB"'),
+    (root + '/Dependencies/minimuxer/Common/MinimuxerConstants.swift',
+     'public static let defaultHostName = "openSSS"',
+     'public static let defaultHostName = "TreeNB"'),
+    (root + '/SideStore/Core/Certificates/CodeSignValidator.swift',
+     'machineName.starts(with: "openSSS")',
+     '(machineName.starts(with: "openSSS") || machineName.starts(with: "TreeNB"))'),
+]
+for p, a, b in reps:
+    try:
+        s = open(p, encoding='utf-8').read()
+    except FileNotFoundError:
+        print('  WARN missing', p); continue
+    if b in s:
+        print('  B1o already:', os.path.basename(p)); continue
+    if a not in s:
+        print('  WARN anchor not found:', os.path.basename(p), repr(a)); continue
+    open(p, 'w', encoding='utf-8').write(s.replace(a, b, 1))
+    print('  B1o patched:', os.path.basename(p))
+PYB1O
+LSTR="$SSS/AltStore/zh-Hans.lproj/Localizable.strings"
+grep -q '"Support openSSS" = "支持与动力"' "$LSTR" \
+  || { echo "FATAL[B1o]: 支持入口文案未归一" >&2; exit 2; }
+if grep -q '"支持 openSSS"' "$LSTR"; then
+  echo "FATAL[B1o]: 仍残留 支持 openSSS" >&2; exit 2
+fi
+grep -q 'title = "支持与动力"' "$SSS/AltStore/Shell/DonationViewController.swift" \
+  || { echo "FATAL[B1o]: 赞助页标题未归一" >&2; exit 2; }
+grep -q 'defaultHostName = "TreeNB"' "$SSS/Dependencies/minimuxer/Common/MinimuxerConstants.swift" \
+  || { echo "FATAL[B1o]: 配对广播名未归一" >&2; exit 2; }
+ok "B1o: 品牌全量统一已校验（.strings value / 赞助页 / 配对广播名）"
+
+# B1p. 冻结用户已验收通过的 UI / 启动链基线（2026-11-27 用户要求「固定下」）
+# ---------------------------------------------------------------------------
+# 真机确认：全屏（无上下黑边）+ 0828 同款玻璃 v3 均正常。此后任何改动只要
+# 破坏其中任一项，patch 阶段立即 FATAL，不再流出坏包。
+# 历史上把界面搞坏的四种写法，逐条禁止重新出现：
+#   ① tnbForceFullScreen（SceneDelegate 遍历 window 强改 frame）
+#   ② B1k fullscreen（LaunchViewController.viewDidAppear 强改 view/window.frame）
+#   ③ if false && !hasCompletedOnboarding（跳过引导页 → 新装卡「正在启动」）
+#   ④ TNBFlickerGuard / TreeLaunchOverlay 闪屏遮罩（额外 window 层）
+GLASS="$ROOT/Sources/Container/GlassChrome.swift"
+LOGVC_FREEZE="$SSS/AltStore/LaunchViewController.swift"
+grep -q 'TNB_GLASS_APPEARANCE_V2 installed (v3 liquid glass)' "$GLASS" \
+  || { echo "FATAL[B1p]: 玻璃 v3 基线被改动" >&2; exit 2; }
+grep -q 'TreeNB\[B1j\]' "$BOOTMGR" \
+  || { echo "FATAL[B1p]: B1j VPN 防闪退丢失" >&2; exit 2; }
+if grep -q 'tnbForceFullScreen' "$SCENEDELEGATE"; then
+  echo "FATAL[B1p]: SceneDelegate frame 强制代码重新出现（会破坏全屏）" >&2; exit 2
+fi
+if grep -q 'TNBFlickerGuard.cover()' "$SCENEDELEGATE"; then
+  echo "FATAL[B1p]: 闪屏遮罩重新出现（会破坏全屏）" >&2; exit 2
+fi
+if grep -q 'B1k\] fullscreen' "$LOGVC_FREEZE"; then
+  echo "FATAL[B1p]: viewDidAppear frame 兜底重新出现（会破坏全屏）" >&2; exit 2
+fi
+if grep -q 'if false && !UserDefaults.standard.hasCompletedOnboarding' "$LOGVC_FREEZE"; then
+  echo "FATAL[B1p]: 跳过引导页重新出现（新装会卡「正在启动」）" >&2; exit 2
+fi
+ok "B1p: 全屏 + 玻璃 v3 + B1j + 0419 启动链已冻结校验"
 
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
@@ -1063,10 +1699,17 @@ cp "$ROOT/Sources/Container/"*.swift "$SSS/AltStore/TreeNB/Container/" 2>/dev/nu
 # 挂进主 App 与 Widget 两个 target 各编一份（不同 module，不冲突）。
 cp "$ROOT/Sources/Widget/TreeWidgetBridge.swift" "$SSS/AltStore/TreeNB/Container/" 2>/dev/null || true
 cp "$ROOT/Sources/Routing/"*.swift   "$SSS/AltStore/TreeNB/Routing/"  2>/dev/null || true
+# Husk 翻译层 UI / 数据层（APK 列表 + 游戏运行视图）挂进主 App source 树。
+# 这些文件 import HuskyEngine（独立 framework），由 project.yml 的 HuskyEngine target 提供。
+cp "$ROOT/Sources/Container/HuskyAPKStore.swift"  "$SSS/AltStore/TreeNB/Container/" 2>/dev/null || true
+cp "$ROOT/Sources/Container/HuskyAPKView.swift"   "$SSS/AltStore/TreeNB/Container/" 2>/dev/null || true
+cp "$ROOT/Sources/Container/HuskyGameView.swift"  "$SSS/AltStore/TreeNB/Container/" 2>/dev/null || true
 # SideStore.debugLog 兼容层（上游把它当 module 限定调用，单包后 module 不存在）。
 # 注意：不再复制 location_simulation_stubs.c —— IDevice 现已用带 location_simulation
 # 的自编译产物（见 build_idevice.sh / A6），再编 C 桩会 duplicate symbol。
 cp "$ROOT/Sources/Compat/SideStoreCompat.swift" "$SSS/AltStore/TreeNB/" 2>/dev/null || true
+# 闪屏抑制遮罩（需在 sceneWillEnterForeground 可见，挂到主 App 源码树根）
+cp "$ROOT/Sources/UI/TNBFlickerGuard.swift" "$SSS/AltStore/TreeNB/" 2>/dev/null || true
 cp "$ROOT/Sources/Widget/"*.swift    "$SSS/AltWidget/TreeNB/"         2>/dev/null || true
 # LC 引擎桥接层挂进 LiveContainer 源码树（framework target 从这里编译）
 mkdir -p "$LC/LiveContainer/TreeNBBridge/include"
@@ -1074,7 +1717,23 @@ cp "$ROOT/Sources/Bridge/LCEngineEntry.m"      "$LC/LiveContainer/TreeNBBridge/"
 cp "$ROOT/Sources/Bridge/include/"*            "$LC/LiveContainer/TreeNBBridge/include/" 2>/dev/null || true
 # Spike 探针也挂进主 App（DEBUG 门禁）
 cp "$ROOT/Sources/Spike/"*.swift "$SSS/AltStore/TreeNB/" 2>/dev/null || true
-ok "适配源码已挂载（Container/Routing/Widget/Bridge/Spike）"
+ok "适配源码已挂载（Container/Routing/Widget/Bridge/Spike/HuskyUI）"
+
+# ---------------------------------------------------------------------------
+# C2. 安卓 APK 入口（在「树🌲应用」Tab 的加号里）
+# ---------------------------------------------------------------------------
+# 入口现已直接写在 Sources/Container/ContainerRootView.swift（经 C1 源码挂载进主 target）：
+# 容器页右上角加号 → confirmationDialog「安装 IPA / 安装安卓 APK」→ 弹出 HuskyAPKView。
+# 之前误挂在开放侧载页 AppsViewController（=「树🌲侧载」Tab），已移除——APK 属于容器/应用页，
+# 与用户心智一致。此处不再 patch 上游任何文件，仅做存在性校验。
+log "校验安卓 APK 入口（树🌲应用 Tab 加号）"
+grep -q 'showAPK' "$ROOT/Sources/Container/ContainerRootView.swift" \
+  || { echo "FATAL[Husky]: ContainerRootView 缺少 showAPK 状态，APK 入口丢失" >&2; exit 3; }
+grep -q '安装安卓 APK' "$ROOT/Sources/Container/ContainerRootView.swift" \
+  || { echo "FATAL[Husky]: ContainerRootView 缺少 APK 菜单项" >&2; exit 3; }
+grep -q 'HuskyAPKView()' "$ROOT/Sources/Container/ContainerRootView.swift" \
+  || { echo "FATAL[Husky]: ContainerRootView 未挂载 HuskyAPKView" >&2; exit 3; }
+ok "安卓 APK 入口已在树🌲应用 Tab 加号（已校验）"
 
 # ---------------------------------------------------------------------------
 # D. 身份归一：bundle id / App Group（报告 §3.6）
@@ -1085,5 +1744,150 @@ grep -rl "com.kdt.livecontainer.treeWidget" "$LC/TreeWidget" 2>/dev/null | while
   sed -i 's/com\.kdt\.livecontainer\.treeWidget/com.openssai.app.treeWidget/g' "$f"
 done
 ok "Widget Keychain service 已归一为 com.openssai.app.treeWidget"
+
+# ---------------------------------------------------------------------------
+# E1. 全 App 液态玻璃（导航栏 + Tab 栏）
+# ---------------------------------------------------------------------------
+# 只改控件层，符合 HIG——玻璃不进内容层。
+# v1 用 swizzling 往 bar 里插自定义 UIVisualEffectView，真机穿模（blur 盖住
+# 大标题/内容）且 appearance 被清空后没有玻璃。v2 改用系统
+# UIBarAppearance.backgroundEffect = .systemUltraThinMaterial：由 UINavigationBar /
+# UITabBar 自己管理背景 blur，层级正确，iOS13~27 都有真实动态毛玻璃。
+# 用 marker 幂等，锚点精确匹配，找不到直接 FATAL（不静默失败）。
+log "E1. 全 App 玻璃拟态（导航栏 + Tab 栏）"
+SHELL_GLASS="$SSS/AltStore/Shell/ShellTabBarController.swift"
+if [ -f "$SHELL_GLASS" ]; then
+  python3 - "$SHELL_GLASS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+orig = s
+changes = []
+
+# 1) 导航栏：系统 appearance 自带毛玻璃背景，标题/按钮层级不受影响
+a_nav = '''        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = ShellTheme.background
+        appearance.shadowColor = .clear
+'''
+b_nav = '''        // TREENB_GLASS_THEME_V2: 用系统 backgroundEffect 生成毛玻璃背景；
+        // 不再手动插 UIVisualEffectView（v1 会穿模盖住大标题与内容）。
+        let appearance = GlassChrome.makeNavigationAppearance()
+'''
+if 'TREENB_GLASS_THEME_V2' not in s:
+    if a_nav not in s:
+        sys.stderr.write('FATAL[Glass]: 导航栏背景锚点未找到，上游结构已变\n')
+        sys.exit(2)
+    s = s.replace(a_nav, b_nav, 1)
+    changes.append('导航栏玻璃')
+
+    # 2) Tab 栏：在 viewDidLoad 的 tabBar.tintColor 后注入系统毛玻璃 appearance
+    a_tab = '''        tabBar.tintColor = ShellTheme.accentColor
+
+        NotificationCenter.default.addObserver(
+'''
+    b_tab = '''        tabBar.tintColor = ShellTheme.accentColor
+
+        // TREENB_GLASS_THEME_V2: 系统 backgroundEffect 毛玻璃，层级正确不穿模。
+        tabBar.standardAppearance = GlassChrome.makeTabBarAppearance()
+        if #available(iOS 15.0, *) {
+            tabBar.scrollEdgeAppearance = tabBar.standardAppearance
+        }
+        tabBar.isTranslucent = true
+
+        NotificationCenter.default.addObserver(
+'''
+    if a_tab not in s:
+        sys.stderr.write('FATAL[Glass]: Tab 栏 tintColor 锚点未找到\n')
+        sys.exit(3)
+    s = s.replace(a_tab, b_tab, 1)
+    changes.append('Tab 栏玻璃')
+
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  ShellTabBarController.swift: ' + '；'.join(changes))
+else:
+    print('  ShellTabBarController.swift: 已含 TREENB_GLASS_THEME_V2，跳过')
+PY
+  # 硬校验：v2 marker 必须落地，且不透明背景/手动插子视图必须已移除
+  grep -q 'TREENB_GLASS_THEME_V2' "$SHELL_GLASS" \
+    || { echo "FATAL[Glass]: v2 玻璃主题 marker 未注入" >&2; exit 4; }
+  grep -q 'GlassChrome.makeNavigationAppearance()' "$SHELL_GLASS" \
+    || { echo "FATAL[Glass]: 导航栏未使用 GlassChrome v2 appearance" >&2; exit 4; }
+  if grep -q 'appearance.configureWithOpaqueBackground()' "$SHELL_GLASS"; then
+    echo "FATAL[Glass]: 导航栏仍为不透明背景，玻璃化失败" >&2; exit 5
+  fi
+  ok "全 App 玻璃主题已注入（导航栏 + Tab 栏）"
+else
+  warn "ShellTabBarController.swift 未找到，跳过玻璃主题"
+fi
+
+# E1.2 进程入口安装玻璃 swizzler（覆盖模态导航控制器等所有 bar）。
+log "E1.2 进程入口安装 GlassChrome"
+MAIN_GLASS="$SSS/AltStore/main.swift"
+if [ -f "$MAIN_GLASS" ]; then
+  python3 - "$MAIN_GLASS" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'GlassChrome.install()' not in s:
+    anchor = 'UIApplicationMain(\n'
+    if anchor not in s:
+        sys.stderr.write('FATAL[Glass]: main.swift 缺少 UIApplicationMain 锚点\n')
+        sys.exit(6)
+    s = s.replace(anchor, 'GlassChrome.install()\n\n' + anchor, 1)
+    open(p, 'w', encoding='utf-8').write(s)
+    print('  main.swift: 已注入 GlassChrome.install()')
+else:
+    print('  main.swift: GlassChrome.install() 已存在')
+PY
+  grep -q 'GlassChrome.install()' "$MAIN_GLASS" \
+    || { echo "FATAL[Glass]: GlassChrome.install() 未注入 main.swift" >&2; exit 7; }
+  ok "GlassChrome 已挂到进程入口"
+else
+  echo "FATAL[Glass]: 缺少 $MAIN_GLASS" >&2
+  exit 8
+fi
+
+
+# B1k（仅保留文案归一）。2026-11-27 12:25 修正。
+# ---------------------------------------------------------------------------
+# 真机反馈：覆盖更新后进 OnboardingView 看到 Welcome to openSSS。
+# 根因：OnboardingView.swift 的 NSLocalizedString key 从未被品牌补丁覆盖（只改了 .strings value）。
+# 修法：OnboardingView.swift 全部 openSSS key → 🌲TreeNB。
+#
+# 【已撤销】原 B1k ①「跳过引导页」：把 `if !hasCompletedOnboarding` 改成 `if false && ...`
+#   会导致新装包 finishLaunching() 命中 `if !hasCompletedOnboarding { ... return }` 早退，
+#   永远不调用 transitionToMainInterface() → 卡在 SplashView「正在启动…」。
+#   0419 的引导页在全屏窗口下按钮可点，回退到 0419 行为即可，不再跳过。
+# 【已撤销】原 B1k ③「frame 全屏兜底」：恢复 0419 窗口行为。
+LOGVC="$SSS/AltStore/LaunchViewController.swift"
+ONBOARD="$SSS/SideStore/Views/Onboarding/OnboardingView.swift"
+
+# ② OnboardingView.swift 文案归一（key 本身必须改，改 .strings value 无效）。
+if [ -f "$ONBOARD" ]; then
+  python3 - "$ONBOARD" <<'PY4'
+import sys
+p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+reps=[
+ ('Welcome to openSSS','Welcome to 🌲TreeNB'),
+ ('connects openSSS to','connects 🌲TreeNB to'),
+ ('openSSS uses a pairing file','🌲TreeNB uses a pairing file'),
+ ('openSSS communicates with','🌲TreeNB communicates with'),
+ ('openSSS requires an Apple ID','🌲TreeNB requires an Apple ID'),
+ ('openSSS setup is complete','🌲TreeNB setup is complete'),
+ ('You can enter openSSS,','You can enter 🌲TreeNB,'),
+ ('Open openSSS','Open 🌲TreeNB'),
+]
+for a,b in reps: s=s.replace(a,b)
+open(p,'w',encoding='utf-8').write(s)
+print('  OnboardingView.swift: 8 处 openSSS → 🌲TreeNB（B1k）')
+PY4
+  if grep -q 'openSSS' "$ONBOARD"; then
+    echo "FATAL[B1k]: OnboardingView.swift 仍残留 openSSS" >&2; exit 12
+  fi
+  ok "B1k: OnboardingView 文案已全部归一"
+else
+  warn "B1k: 未找到 $ONBOARD，跳过文案归一"
+fi
 
 log "✅ 全部补丁执行完毕。下一步：xcodegen generate && 真机 Spike（docs/启动链改造设计.md §5）"

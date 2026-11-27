@@ -22,3 +22,11 @@ Dependencies/
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 线上部署备份与本地构建产物
+backup/
+bootstrap-engine/target/
+
+# bootstrap 里的静态引擎 ELF（CI 重编 + 线上部署用，不入 git）
+bootstrap/treenb-bootstrap
+bootstrap/treenb-bootstrap-*
