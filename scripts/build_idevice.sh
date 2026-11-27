@@ -56,6 +56,45 @@ fi
 grep -q 'location_simulation = \["idevice/location_simulation"\]' "$SRC/ffi/Cargo.toml" \
   || die "源码缺少 location_simulation feature（PIN 漂移？）"
 
+# ---- 1b. B1z: 修 AFC MakeDir 路径上的 realloc 堆损坏 ----
+# 真机 21:45 .ips（build 202611272119）符号化：
+#   IdeviceGateway.syncsendIpaAfc → afc_make_directory → _realloc →
+#   ___BUG_IN_CLIENT_OF_LIBMALLOC_POINTER_BEING_FREED_WAS_NOT_ALLOCATED → SIGABRT。
+# AfcPacket::serialize 用 Vec::new() 逐段 extend，MakeDir 的 40B 头 + 路径
+# 必然触发一次 realloc；改成精确容量预分配，绕开这条崩溃路径。
+python3 - "$SRC/idevice/src/services/afc/packet.rs" <<'PYB1Z'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if 'TreeNB[B1z]' not in s:
+    old = '''    pub fn serialize(&self) -> Vec<u8> {
+        let mut res = Vec::new();
+
+        res.extend_from_slice(&self.header.serialize());
+        res.extend_from_slice(&self.header_payload);
+        res.extend_from_slice(&self.payload);
+
+        res
+    }'''
+    new = '''    pub fn serialize(&self) -> Vec<u8> {
+        // TreeNB[B1z]: 精确容量预分配，避免 AFC MakeDir 路径上的 realloc 崩溃。
+        let capacity = AfcPacketHeader::LEN as usize
+            + self.header_payload.len()
+            + self.payload.len();
+        let mut res = Vec::with_capacity(capacity);
+        res.extend_from_slice(&self.header.serialize());
+        res.extend_from_slice(&self.header_payload);
+        res.extend_from_slice(&self.payload);
+        res
+    }'''
+    if old not in s:
+        raise SystemExit('FATAL[B1z]: AfcPacket::serialize 锚点缺失')
+    open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+    print('  B1z patched: AfcPacket::serialize prealloc')
+PYB1Z
+grep -q 'TreeNB\[B1z\]' "$SRC/idevice/src/services/afc/packet.rs" \
+  || die "B1z 补丁未写入 $SRC/idevice/src/services/afc/packet.rs"
+
 # ---- 2. 只编 iOS device arm64，default features + location_simulation ----
 # default 已含 dvt / tunnel_tcp_stack / remote_pairing（IdeviceGateway.swift 需要的
 # tunnel_create_rppairing_with_options 在其中），所以只需追加 obfuscate + location_simulation。

@@ -2110,6 +2110,58 @@ grep -q 'TreeNB\[B1x\]' "$RESIGN_VC" \
   || { echo "FATAL[B1x]: 重签安装提示未写入" >&2; exit 2; }
 ok "B1x: 重签安装终止提示改为中文，明确不是闪退"
 
+# B1y. 启动期 CoreLocation 断言：音频保活不再顺手初始化定位服务
+# ---------------------------------------------------------------------------
+# 真机 23:22 .ips（build 202611272230）符号化：
+#   AppDelegate.didFinishLaunching → BackgroundServiceManager.ensure... →
+#   BackgroundAudioService.start() → BackgroundLocationService.shared（dispatch_once）
+#   → BackgroundLocationService.init() → CoreLocation 断言 → SIGABRT。
+# 根因：音频保活 start() 里调用 BackgroundLocationService.shared.stop()，
+# 仅仅为了停掉定位，却把 CLLocationManager 创建提前到了每次启动。
+# 修法：① 音频保活不再碰定位服务；② 定位服务设置推迟到真正选中定位模式，
+# 且不再在 init 里打开 allowsBackgroundLocationUpdates（该赋值会触发断言）。
+B1Y_AUDIO="$SSS/SideStore/Core/BackgroundServices/BackgroundAudioService.swift"
+B1Y_LOC="$SSS/SideStore/Core/BackgroundServices/BackgroundLocationService.swift"
+python3 - "$B1Y_AUDIO" "$B1Y_LOC" <<'PYB1Y'
+import sys
+audio_path, loc_path = sys.argv[1], sys.argv[2]
+
+s = open(audio_path, encoding='utf-8').read()
+if 'TreeNB[B1y]' not in s:
+    old = '''    public func start() -> Bool {
+        BackgroundLocationService.shared.stop()
+'''
+    new = '''    public func start() -> Bool {
+        // TreeNB[B1y]: 音频保活不初始化 CoreLocation。
+        // 原先这里调用 BackgroundLocationService.shared.stop() 只为停定位，
+        // 却让 CLLocationManager 在每次启动时创建，iOS 27 上触发断言闪退。
+        print("TreeNB[B1y]: audio keepalive, no CoreLocation init")
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1y]: BackgroundAudioService.start 锚点缺失')
+    s = s.replace(old, new, 1)
+    open(audio_path, 'w', encoding='utf-8').write(s)
+    print('  B1y patched: BackgroundAudioService.start')
+
+s = open(loc_path, encoding='utf-8').read()
+if 'TreeNB[B1y]' not in s:
+    old = '        self.manager.allowsBackgroundLocationUpdates = true\n'
+    new = '''        // TreeNB[B1y]: 不在 init 里打开后台定位。
+        // Info.plist 已声明 UIBackgroundModes=location；该赋值在 iOS 27 上
+        // 会在启动阶段直接抛 NSAssertion，且此时用户根本没选定位保活。
+        print("TreeNB[B1y]: location service init without background flag")
+'''
+    if old not in s:
+        raise SystemExit('FATAL[B1y]: allowsBackgroundLocationUpdates 锚点缺失')
+    s = s.replace(old, new, 1)
+    open(loc_path, 'w', encoding='utf-8').write(s)
+    print('  B1y patched: BackgroundLocationService.init')
+PYB1Y
+for f in "$B1Y_AUDIO" "$B1Y_LOC"; do
+  grep -q 'TreeNB\[B1y\]' "$f" || { echo "FATAL[B1y]: 保活补丁未写入 $f" >&2; exit 2; }
+done
+ok "B1y: 启动期不再初始化 CoreLocation（修 23:22 启动闪退）"
+
 # B1c. SceneDelegate：把小组件深链接入 TNBDeepLinkRouter（真机 bug 修复）
 # ---------------------------------------------------------------------------
 # 现象：点小组件里的容器 App，只进 openSSS 界面，不启动对应 guest。

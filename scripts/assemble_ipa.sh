@@ -599,7 +599,20 @@ done
 grep -q 'TreeNB\[B1x\]' "upstream/openSSS/AltStore/Authentication/ResignAltStoreViewController.swift" || {
   echo "致命错误: 重签安装终止提示未中文化（B1x）。" >&2; exit 1
 }
-echo "  多 Apple ID 保险库（B1w）与安装提示（B1x）校验通过"
+for f in upstream/openSSS/SideStore/Core/BackgroundServices/BackgroundAudioService.swift \
+         upstream/openSSS/SideStore/Core/BackgroundServices/BackgroundLocationService.swift; do
+  grep -q 'TreeNB\[B1y\]' "$f" || {
+    echo "致命错误: 启动期 CoreLocation 防闪退补丁未写入 $f。" >&2; exit 1
+  }
+done
+if [ -f "build/idevice-src/idevice/src/services/afc/packet.rs" ]; then
+  grep -q 'TreeNB\[B1z\]' "build/idevice-src/idevice/src/services/afc/packet.rs" || {
+    echo "致命错误: AFC MakeDir realloc 防闪退补丁未写入（B1z）。" >&2; exit 1
+  }
+else
+  echo "警告: 找不到 build/idevice-src/.../packet.rs，跳过 B1z 校验" >&2
+fi
+echo "  多 Apple ID 保险库（B1w）、安装提示（B1x）、启动保活（B1y）、AFC（B1z）校验通过"
 
 # ★ B1j 硬校验（2026-11-27 闪退根因）：启动期强制设备往返必须已移除，
 # 否则 LocalDevVPN 开着时 fetchUDID(forceLive:true) 触发 minimuxer FFI
