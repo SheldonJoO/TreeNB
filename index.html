@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#050a07">
 <meta name="description" content="TreeNB 1307 免电脑安装工作台：生成安装命令、下载 IPA、查看更新清单。">
-<title>TreeNB // 免电脑安装工作台</title>
+<title>TreeNB Ⅱ // 免电脑安装工作台</title>
 <style>
   :root {
     color-scheme: dark;
@@ -21,6 +21,7 @@
     --muted: #73a382;
     --amber: #ffc15c;
     --amber-bg: rgba(66, 40, 4, .35);
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
     --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, "PingFang SC", monospace;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -33,7 +34,7 @@
       linear-gradient(rgba(0, 0, 0, .18), rgba(0, 0, 0, .45)),
       var(--bg);
     color: var(--ink);
-    font-family: var(--mono);
+    font-family: var(--sans);
     line-height: 1.65;
     padding: max(18px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) calc(44px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   }
@@ -99,13 +100,14 @@
   h1 {
     margin: 0;
     color: var(--green);
+    font-family: var(--sans);
     font-size: clamp(36px, 5.7vw, 76px);
     line-height: 1;
-    letter-spacing: .08em;
+    letter-spacing: -.035em;
     font-weight: 800;
     text-shadow: 0 0 22px rgba(85, 255, 136, .3), 0 0 60px rgba(85, 255, 136, .12);
   }
-  h1 span { color: var(--ink); font-weight: 400; }
+  h1 span { color: var(--ink); font-weight: 800; }
   .hero-sub { margin: 14px 0 0; color: var(--muted); font-size: clamp(12px, 1.5vw, 15px); letter-spacing: .08em; }
   .hero-tags { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
   .tag {
@@ -212,6 +214,7 @@
   .terminal {
     border: 1px solid var(--line-bright);
     background: #020803;
+    font-family: var(--mono);
     box-shadow: inset 0 0 36px rgba(20, 110, 44, .055);
   }
   .terminal-bar {
@@ -261,7 +264,7 @@
     padding: 10px 16px;
     background: var(--green);
     color: #031108;
-    font: 700 12px/1.3 var(--mono);
+    font: 700 12px/1.3 var(--sans);
     letter-spacing: .04em;
     text-decoration: none;
     cursor: pointer;
@@ -401,7 +404,7 @@
 
   <header class="hero">
     <p class="eyebrow">ON-DEVICE SIGNING CONSOLE</p>
-    <h1>TREEL<span>NB</span></h1>
+    <h1>TreeNB <span>Ⅱ</span></h1>
     <p class="hero-sub">免电脑安装工作台 &nbsp;·&nbsp; v1.4.6 &nbsp;·&nbsp; BUILD 202611281307</p>
     <div class="hero-tags">
       <span class="tag">NO COMPUTER</span>
@@ -529,7 +532,7 @@
   </div>
 
   <footer>
-    <span>TREELNB v1.4.6 · OPEN SOURCE · BUILD 202611281307</span>
+    <span>TreeNB Ⅱ v1.4.6 · OPEN SOURCE · BUILD 202611281307</span>
     <span class="boot-line">STATUS: READY_</span>
   </footer>
 </div>
