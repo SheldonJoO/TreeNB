@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "channel": "stable",
+  "bundleIdentifier": "com.openssai.app",
+  "displayName": "树应用",
+  "version": "1.4.6",
+  "build": "202611281307",
+  "minimumOSVersion": "15.0",
+  "releasedAt": "2026-11-28T13:07:00+08:00",
+  "mandatory": false,
+  "installMode": "resign_and_install",
+  "packageType": "unsigned_ipa",
+  "downloadUrl": "https://TreeNB.idoer.help/downloads/TreeNB-202611281307-unsigned.ipa",
+  "sha256": "e44908407e6ef9219484d99519331421a76d9e71ce7c65d44ed3125bddcd8649",
+  "size": 20940372,
+  "releaseUrl": "https://github.com/SheldonJoO/TreeNB/releases/tag/v1.4.6",
+  "notes": [
+    "修复侧载描述文件安装时的错误对象生命周期崩溃",
+    "修复切换 Apple ID 后已保存证书被清空导致的错误码 8",
+    "多账号凭据、团队、证书和 anisette 状态独立持久化",
+    "新增 guest 独立错误日志、内置排查和邮件反馈"
+  ]
+}
