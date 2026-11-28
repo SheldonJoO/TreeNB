@@ -1585,8 +1585,8 @@ if '// ===== TreeNB[B1err] IdeviceFfiError 入口校验 =====' not in s:
 // ===== TreeNB[B1err] IdeviceFfiError 入口校验 =====
 private struct TNBFFIErrorSnapshot {
     let code: Int32
-    let subCode: Int32
-    let message: UnsafeMutablePointer<CChar>?
+    let sub_code: Int32
+    let message: UnsafePointer<CChar>?
 }
 
 @inline(__always)
@@ -1595,11 +1595,11 @@ private func tnbReadFFIError(
 ) -> TNBFFIErrorSnapshot {
     guard let err, tnbPtrOK(err) else {
         NSLog("[TreeNB] TNB_FFI_GUARD_B1ERR rejected invalid IdeviceFfiError pointer")
-        return TNBFFIErrorSnapshot(code: -1, subCode: 0, message: nil)
+        return TNBFFIErrorSnapshot(code: -1, sub_code: 0, message: nil)
     }
     return TNBFFIErrorSnapshot(
         code: err.pointee.code,
-        subCode: err.pointee.sub_code,
+        sub_code: err.pointee.sub_code,
         message: err.pointee.message
     )
 }

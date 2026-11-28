@@ -652,6 +652,8 @@ if re.search(r'\b[A-Za-z_][A-Za-z0-9_]*Err\.pointee\b', helper):
     raise SystemExit('致命错误: B1err 安全读取器自身结构不完整。')
 if helper.count('err.pointee') != 3 or 'guard let err, tnbPtrOK(err)' not in helper:
     raise SystemExit('致命错误: B1err 安全读取器缺少完整指针门禁。')
+if 'let sub_code: Int32' not in helper or 'let message: UnsafePointer<CChar>?' not in helper:
+    raise SystemExit('致命错误: B1err 快照字段与 IdeviceFfiError ABI 不一致。')
 PYB1ERRVERIFY
 TNB_FFI_STRINGS=$(mktemp)
 strings "$APP/$MAIN_EXE" > "$TNB_FFI_STRINGS" 2>/dev/null || true
