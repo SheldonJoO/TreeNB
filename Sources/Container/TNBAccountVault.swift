@@ -66,6 +66,7 @@ struct TNBAccountRecord: Codable, Identifiable, Hashable {
     }
 
     var hasCertificate: Bool {
+        if let certificates, certificates.contains(where: { !$0.p12.isEmpty }) { return true }
         guard let data = certificateP12 else { return false }
         return !data.isEmpty
     }
@@ -355,15 +356,15 @@ final class TNBAccountVault: ObservableObject {
             }
         }
         let targetTeamID = requestedTeam ?? record.teams.first?.identifier
-        if let targetTeamID { try ensureTeamRecord(email: record.email, teamID: targetTeamID) }
 
         var storedCertificate = record.certificate(forTeam: targetTeamID)
         if storedCertificate == nil, let teamID = targetTeamID {
             storedCertificate = cachedCertificate(for: teamID)
         }
-        let certificate = try storedCertificate.map {
-            try CertificateManager.parse($0.p12, password: $0.password)
-        }
+        guard let storedCertificate else { throw TNVaultError.missingCertificate }
+        let certificate = try CertificateManager.parse(storedCertificate.p12, password: storedCertificate.password)
+
+        if let targetTeamID { try ensureTeamRecord(email: record.email, teamID: targetTeamID) }
         let manager = CertificateManager.shared
         let previousCertificate = manager.activeCertificate?.certificate
         let context = DatabaseManager.shared.viewContext
@@ -398,14 +399,12 @@ final class TNBAccountVault: ObservableObject {
             throw TNVaultError.accountNotFound
         }
         accounts[updatedIndex] = record
-        if let storedCertificate {
-            storeCertificate(storedCertificate.p12, password: storedCertificate.password, at: &accounts[updatedIndex])
-        }
+        storeCertificate(storedCertificate.p12, password: storedCertificate.password, at: &accounts[updatedIndex])
         accounts[updatedIndex].activeTeamIdentifier = targetTeamID
         accounts[updatedIndex].updatedAt = Date()
         currentID = accountID
         persist()
-        debugLog("[TreeNB][Vault] activated \(record.email) team=\(targetTeamID ?? "none") cert=\(certificate != nil)")
+        debugLog("[TreeNB][Vault] activated \(record.email) team=\(targetTeamID ?? "none") cert=true")
     }
 
     nonisolated static func isValidTeamIdentifier(_ value: String) -> Bool {
@@ -420,11 +419,15 @@ final class TNBAccountVault: ObservableObject {
     nonisolated static func teamID(from p12: Data, password: String?) -> String? {
         guard let cert = try? CertificateManager.parse(p12, password: password),
               let der = cert.data else { return nil }
-        let text = String(decoding: der, as: UTF8.self)
-        guard let regex = try? NSRegularExpression(pattern: "OU=([A-Z0-9]{10})"),
-              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let range = Range(match.range(at: 1), in: text) else { return nil }
-        return String(text[range])
+        let details = parseCertificate(derData: der)
+        for distinguishedName in [details.subject, details.issuer] {
+            for component in distinguishedName.components(separatedBy: ", ") {
+                guard component.hasPrefix("Organizational Unit=") else { continue }
+                let candidate = String(component.dropFirst("Organizational Unit=".count)).uppercased()
+                if isValidTeamIdentifier(candidate) { return candidate }
+            }
+        }
+        return nil
     }
 
     private func ensureTeamRecord(email: String, teamID: String) throws {
@@ -620,7 +623,7 @@ enum TNVaultError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .accountNotFound: return "找不到这个 Apple ID 的保存记录。"
-        case .missingCertificate: return "这个 Apple ID 还没有保存签名证书。请先登录或导入 p12。"
+        case .missingCertificate: return "这个 ID 还没有可用的团队签名证书。请为该 ID 导入包含对应团队私钥的 p12；切换账号本身不需要重新登录。"
         case .missingCredentials: return "这个 Apple ID 还没有保存登录凭据。请先登录一次，之后切换无需重新登录。"
         case .invalidTeam: return "团队 ID 应为 10 位大写字母或数字。"
         case .invalidBackup: return "账号配置文件格式不对或密码错误。"

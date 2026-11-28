@@ -54,6 +54,13 @@ typedef void (^TNBInstallCompletion)(BOOL success, NSString *_Nullable appBundle
 /// 首次启动自动导入 App bundle 内置的 JIT-less p12 证书（若用户尚未手动导入）。
 + (void)autoImportBundledCertificateIfNeeded;
 
+/// 独立侧载与 guest 诊断日志。内容不含密码、p12、私钥或 Token。
++ (void)recordGuestDiagnostic:(NSString *)event detail:(nullable NSString *)detail;
++ (void)recordGuestError:(NSError *)error stage:(NSString *)stage;
++ (NSURL *)guestLogFileURL;
++ (NSString *)guestLogText;
++ (void)clearGuestLog;
+
 /// 自动导入证书后，用该证书把已装 guest 重签一次（异步，不阻塞 UI）。
 - (void)autoResignGuestsIfNeeded;
 

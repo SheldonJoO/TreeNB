@@ -7,8 +7,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ARCHIVE_PATH="${ARCHIVE_PATH:-build/TreeNB.xcarchive}"
 SCHEME="${SCHEME:-TreeNB}"
-STAMP=$(TZ=Asia/Shanghai date +%Y%m%d%H%M)
-OUT="build/TreeNB-${STAMP}-unsigned.ipa"
 
 echo "==> [1/4] 解出 archive 的 Payload"
 rm -rf build/Payload
@@ -579,6 +577,7 @@ if ! echo "$BUILD_VER" | grep -Eq '^[0-9]{12}$'; then
   exit 1
 fi
 echo "  全 App 玻璃 + 时间戳版本号校验通过（${SHORT_VER} / ${BUILD_VER}）"
+OUT="build/TreeNB-${BUILD_VER}-unsigned.ipa"
 
 # ★ B1w 硬校验：多 Apple ID 保险库必须完整进包（新源码 + 三处注入）
 VAULT_SRC="Sources/Container/TNBAccountVault.swift"
@@ -618,12 +617,51 @@ fi
 if [ "$(grep -c 'idevice_pairing_file_free(tempPairingFile)' "$IDVG_SRC")" -ne 2 ]; then
   echo "致命错误: TCP provider 创建失败时的 pairing file 释放路径不完整。" >&2; exit 1
 fi
+grep -q 'parseCertificate(derData: der)' "$VAULT_SRC" || {
+  echo "致命错误: 证书团队识别仍使用 DER 明文匹配，OU 解析修复未进包。" >&2; exit 1
+}
+if grep -q 'NSRegularExpression(pattern: "OU=' "$VAULT_SRC"; then
+  echo "致命错误: 保险库仍在 DER 中搜索明文 OU=，正常 p12 会识别失败。" >&2; exit 1
+fi
+grep -q 'guard let storedCertificate else { throw TNVaultError.missingCertificate }' "$VAULT_SRC" || {
+  echo "致命错误: 切换账号缺少证书前置保护，仍可能清空当前证书。" >&2; exit 1
+}
+MM_PKG_SRC="upstream/openSSS/Dependencies/minimuxer/Package.swift"
+MM_API_SRC="upstream/openSSS/Dependencies/minimuxer/Sources/MinimuxerApi.swift"
+if grep -q 'LibimobiledeviceGateway' "$MM_PKG_SRC"; then
+  echo "致命错误: Minimuxer 仍链接 C gateway，misagent ABI 冲突会复现。" >&2; exit 1
+fi
+if grep -q 'import LibimobiledeviceGateway' "$MM_API_SRC"; then
+  echo "致命错误: MinimuxerApi 仍导入 C gateway。" >&2; exit 1
+fi
+python3 - "$IDVG_SRC" <<'PYB1ERRVERIFY'
+import re
+import sys
+
+source = open(sys.argv[1], encoding='utf-8').read()
+business, marker, helper = source.partition('// ===== TreeNB[B1err]')
+if not marker:
+    raise SystemExit('致命错误: IdeviceFfiError 入口指针防护未写入。')
+dereference = r'\b([A-Za-z_][A-Za-z0-9_]*Err|\berr)\.pointee\b'
+if re.search(dereference, business):
+    raise SystemExit('致命错误: IdeviceGateway 仍有未保护的错误结构体解引用。')
+if re.search(r'\b[A-Za-z_][A-Za-z0-9_]*Err\.pointee\b', helper):
+    raise SystemExit('致命错误: B1err 安全读取器自身结构不完整。')
+if helper.count('err.pointee') != 3 or 'guard let err, tnbPtrOK(err)' not in helper:
+    raise SystemExit('致命错误: B1err 安全读取器缺少完整指针门禁。')
+PYB1ERRVERIFY
 TNB_FFI_STRINGS=$(mktemp)
 strings "$APP/$MAIN_EXE" > "$TNB_FFI_STRINGS" 2>/dev/null || true
 if ! grep -q 'com.treenb.idevice.ffi' "$TNB_FFI_STRINGS"; then
   rm -f "$TNB_FFI_STRINGS"
   echo "致命错误: 主二进制缺少 B1t 串行 FFI 队列标记，补丁没有真正编入。" >&2; exit 1
 fi
+for marker in 'TNB_FFI_GUARD_B1ERR' 'guest-launch.log' 'TreeNB.OperationError' 'sideload.' 'zhuxiandong@gmail.com' 'code signature invalid'; do
+  grep -q "$marker" "$TNB_FFI_STRINGS" || {
+    rm -f "$TNB_FFI_STRINGS"
+    echo "致命错误: 主二进制缺少诊断/修复标记 $marker。" >&2; exit 1
+  }
+done
 rm -f "$TNB_FFI_STRINGS"
 grep -q 'TreeNB\[B1x\]' "upstream/openSSS/AltStore/Authentication/ResignAltStoreViewController.swift" || {
   echo "致命错误: 重签安装终止提示未中文化（B1x）。" >&2; exit 1
@@ -642,7 +680,26 @@ if [ -f "build/idevice-src/idevice/src/services/afc/packet.rs" ]; then
 else
   echo "警告: 找不到 build/idevice-src/.../packet.rs，跳过 B1z 校验" >&2
 fi
-echo "  多 Apple ID 保险库（B1w/B1w2）、安装提示（B1x）、启动保活（B1y）、FFI 生命周期（B1t）、AFC（B1z）校验通过"
+DIAG_SRC="Sources/Container/TNBErrorGuideView.swift"
+[ -f "$DIAG_SRC" ] || {
+  echo "致命错误: 内置错误对照与反馈页面缺失。" >&2; exit 1
+}
+grep -q 'showDiagnostics' "$ROOT_VIEW" || {
+  echo "致命错误: 容器菜单缺少错误对照与日志入口。" >&2; exit 1
+}
+for marker in 'recordGuestDiagnostic' 'recordGuestError' 'clearGuestLog' 'zhuxiandong@gmail.com'; do
+  grep -q "$marker" "$ENGINE_SRC" "$DIAG_SRC" || {
+    echo "致命错误: guest 独立日志/反馈链路缺少 $marker。" >&2; exit 1
+  }
+done
+LOGGED_ERROR_SRC="upstream/openSSS/AltStore/Core/Model/LoggedError.swift"
+grep -q 'TreeNB\[B1diag\]' "$LOGGED_ERROR_SRC" || {
+  echo "致命错误: 侧载管线最终错误未接入独立日志。" >&2; exit 1
+}
+grep -q 'LCEngineEntry.recordGuestDiagnostic' "$LOGGED_ERROR_SRC" || {
+  echo "致命错误: 侧载错误日志调用缺失。" >&2; exit 1
+}
+echo "  多 Apple ID 保险库（B1w/B1w2）、安装提示（B1x）、启动保活（B1y）、FFI 生命周期（B1t/B1err）、AFC（B1z）、侧载与 guest 错误对照及反馈校验通过"
 
 # ★ B1j 硬校验（2026-11-27 闪退根因）：启动期强制设备往返必须已移除，
 # 否则 LocalDevVPN 开着时 fetchUDID(forceLive:true) 触发 minimuxer FFI
@@ -683,5 +740,6 @@ fi
 
 echo "==> [4/4] 打包 IPA"
 (cd build && zip -qr "$(basename "$OUT")" Payload -x "._*" -x ".DS_Store" -x "__MACOSX")
+touch -t "${BUILD_VER:0:4}${BUILD_VER:4:2}${BUILD_VER:6:2}${BUILD_VER:8:2}${BUILD_VER:10:2}.00" "$OUT"
 
 echo "完成: $OUT"

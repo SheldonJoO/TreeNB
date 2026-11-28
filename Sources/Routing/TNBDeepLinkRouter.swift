@@ -67,6 +67,7 @@ public final class TNBDeepLinkRouter {
                                               classicMode: 0)
                     return true
                 } catch {
+                    LCEngineEntry.recordGuestError(error, stage: "router.widget_launch")
                     UserDefaults.standard.set(error.localizedDescription,
                                               forKey: "TNBLastGuestLaunchError")
                 }
@@ -95,9 +96,10 @@ public final class TNBDeepLinkRouter {
                 err = error as NSError
             }
             if !ok {
+                let failure = err?.localizedDescription ?? "小组件启动应用失败，请打开树应用容器页重试"
+                if let err { LCEngineEntry.recordGuestError(err, stage: "router.deeplink_launch") }
                 // 启动失败原因透传到容器页展示，别静默停在这里。
-                UserDefaults.standard.set(
-                    err?.localizedDescription ?? "小组件启动应用失败，请打开树应用容器页重试",
+                UserDefaults.standard.set(failure,
                     forKey: "TNBLastGuestLaunchError")
                 NSLog("[TreeNB] 小组件启动 guest 失败: %@", err?.localizedDescription ?? "未知")
             }

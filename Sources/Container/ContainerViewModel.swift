@@ -41,6 +41,7 @@ final class ContainerViewModel: ObservableObject {
             ok = true
         } catch {
             err = error as NSError
+            LCEngineEntry.recordGuestError(error, stage: "engine.bootstrap")
         }
         isBootstrapping = false
         if !ok { lastError = err?.localizedDescription ?? "引擎初始化失败" }
@@ -80,6 +81,7 @@ final class ContainerViewModel: ObservableObject {
                     if success {
                         await self?.refresh()
                     } else {
+                        if let err { LCEngineEntry.recordGuestError(err, stage: "container.install") }
                         self?.lastError = err?.localizedDescription ?? "安装失败"
                     }
                     cont.resume()
@@ -100,6 +102,7 @@ final class ContainerViewModel: ObservableObject {
             ok = true
         } catch {
             err = error as NSError
+            LCEngineEntry.recordGuestError(error, stage: "container.uninstall")
         }
         if !ok {
             lastError = err?.localizedDescription ?? "删除失败"
@@ -119,6 +122,7 @@ final class ContainerViewModel: ObservableObject {
             ok = true
         } catch {
             err = error as NSError
+            LCEngineEntry.recordGuestError(error, stage: "container.launch")
         }
         if !ok {
             lastError = err?.localizedDescription ?? "启动失败"

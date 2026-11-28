@@ -180,6 +180,9 @@ struct TNAccountVaultView: View {
                 HStack {
                     Label(team.name, systemImage: "person.3")
                     Spacer()
+                    Text(certificateLabel(account: account, teamID: team.identifier))
+                        .font(.caption2)
+                        .foregroundStyle(account.certificate(forTeam: team.identifier) == nil ? .orange : .secondary)
                     Text(team.identifier)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -221,6 +224,10 @@ struct TNAccountVaultView: View {
                 if isActive { Text("· 使用中").foregroundStyle(.green) }
             }
         }
+    }
+
+    private func certificateLabel(account: TNBAccountRecord, teamID: String) -> String {
+        account.certificate(forTeam: teamID) == nil ? "未归档" : "证书已归档"
     }
 
     private func sourceLabel(_ source: String) -> String {
@@ -376,6 +383,11 @@ private struct TeamPickerView: View {
                                 Text("\(team.identifier) · \(team.type)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                Text(account.certificate(forTeam: team.identifier) == nil
+                                     ? "此团队尚未归档证书；切换时会先检查本机证书缓存。"
+                                     : "此团队的证书和私钥已归档，可直接切换。")
+                                    .font(.caption2)
+                                    .foregroundStyle(account.certificate(forTeam: team.identifier) == nil ? .orange : .secondary)
                             }
                         }
                         .contentShape(Rectangle())

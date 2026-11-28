@@ -125,7 +125,8 @@ jobs:
             (cd "$ARCHIVE_PATH/dSYMs" && zip -q -r "$GITHUB_WORKSPACE/build/TreeNB-xcode26-dSYM.zip" *.dSYM)
             ls -lh build/TreeNB-xcode26-dSYM.zip
           else
-            echo "WARNING: no dSYM found in $ARCHIVE_PATH/dSYMs" >&2
+            echo "ERROR: no dSYM found in $ARCHIVE_PATH/dSYMs" >&2
+            exit 1
           fi
 
       - name: Upload unsigned artifact
@@ -136,7 +137,7 @@ jobs:
           path: |
             build/*.ipa
             build/SHA256SUMS.txt
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: Upload dSYM artifact
         if: success()
@@ -144,4 +145,4 @@ jobs:
         with:
           name: TreeNB-xcode26-dSYM
           path: build/TreeNB-xcode26-dSYM.zip
-          if-no-files-found: ignore
+          if-no-files-found: error

@@ -511,6 +511,39 @@ else
   exit 2
 fi
 
+# A7. TreeNB 固定使用 Rust IDevice；禁止 C libimobiledevice 同时进入 Minimuxer 链接。
+#     两个静态库都导出 misagent_*。C 版返回 int，Rust 版返回 IdeviceFfiError*，
+#     同名符号被 C 版抢先链接后，Swift 会把 -1 当错误结构体指针并 SIGSEGV。
+MM_PKG="$SSS/Dependencies/minimuxer/Package.swift"
+MM_API="$SSS/Dependencies/minimuxer/Sources/MinimuxerApi.swift"
+[ -f "$MM_PKG" ] || { echo "FATAL[A7]: 缺少 $MM_PKG" >&2; exit 2; }
+[ -f "$MM_API" ] || { echo "FATAL[A7]: 缺少 $MM_API" >&2; exit 2; }
+python3 - "$MM_PKG" "$MM_API" <<'PYA7'
+import re
+import sys
+
+package_path, api_path = sys.argv[1:]
+package = open(package_path, encoding='utf-8').read()
+package = re.sub(
+    r'^\s*\.product\(name:\s*"LibimobiledeviceGateway",\s*package:\s*"DeviceGateway"\),?\s*\n',
+    '', package, flags=re.MULTILINE)
+open(package_path, 'w', encoding='utf-8').write(package)
+
+api = open(api_path, encoding='utf-8').read()
+api = re.sub(r'^import LibimobiledeviceGateway\s*\n', '', api, flags=re.MULTILINE)
+api = re.sub(
+    r'case \.libimobiledevice:\s*return LibimobiledeviceGateway\(\)',
+    'case .libimobiledevice:\n            return IdeviceGateway()', api)
+open(api_path, 'w', encoding='utf-8').write(api)
+PYA7
+! grep -q 'LibimobiledeviceGateway' "$MM_PKG" \
+  || { echo "FATAL[A7]: Minimuxer 仍链接 C libimobiledevice gateway" >&2; exit 2; }
+! grep -q 'import LibimobiledeviceGateway' "$MM_API" \
+  || { echo "FATAL[A7]: MinimuxerApi 仍导入 C gateway" >&2; exit 2; }
+[ "$(grep -c 'case .libimobiledevice:' "$MM_API")" -eq 1 ] \
+  || { echo "FATAL[A7]: GatewayBackend 分支不完整" >&2; exit 2; }
+ok "A7: Minimuxer 固定使用 Rust IDevice，C/Rust misagent ABI 不再同包链接"
+
 # ---------------------------------------------------------------------------
 # B. openSSS 侧：加容器 Tab + 深链路由 + Widget 并入
 # ---------------------------------------------------------------------------
@@ -886,7 +919,7 @@ n4 = '''        let cell = super.tableView(tableView, cellForRowAt: effectiveInd
         }
         
         if Section.allCases[indexPath.section] == .account {'''
-if 'row == .osUpdateBlock {' not in s:
+if 'AdvancedSettingsRow.allCases[indexPath.row].rawValue == AdvancedSettingsRow.osUpdateBlock.rawValue' not in s:
     if a4 not in s:
         sys.stderr.write('FATAL[B1e]: cellForRowAt 锚点未找到\n')
         sys.exit(2)
@@ -1372,13 +1405,10 @@ private func tnbPtrOK<T>(_ p: UnsafePointer<T>?) -> Bool {
         NSLog("[TreeNB] TNB_FFI_GUARD_V2 rejected invalid C string pointer \(a)")
         return false
     }
-    // TreeNB[B1t]: 拦截“错误码被当成 char*”的伪指针。
-    // 真机 .ips 2026-11-27 18:27:02（1620 包，UUID 88219666）符号化：
-    //   getErrorMessage(from:) → err.pointee.message = 0x100000007 →
-    //   String(cString:) → SIGSEGV at KERN_INVALID_ADDRESS 0x100000007。
-    //   0x100000007 低 32 位仅 0x7（典型 FFI 错误码），落在旧白名单内被放行。
-    //   iOS 用户态由 malloc/mmap 分配的字符串指针低 32 位必 ≥ 0x1000（页内偏移
-    //    + 堆基址），不会是 0x7 这种小整数。补这条规则不误伤合法指针。
+    // TreeNB[B1err]: 拦截“错误码被当成指针”的伪指针。
+    // 2026-11-28 的 .ips 证明 err == 0xffffffff，随后读取错误结构体 message 字段崩溃；
+    // 根因是 C misagent_install 返回 int -1，被按 Rust IdeviceFfiError* 解读。
+    // A7 已断开 C/Rust 同名链接，这里继续拒绝低地址与高位哨兵指针。
     let low32 = UInt32(truncatingIfNeeded: a)
     guard low32 >= 0x1000 else {
         NSLog("[TreeNB] TNB_FFI_GUARD_V2 rejected enum-like pointer \(a)")
@@ -1394,7 +1424,7 @@ private func tnbPtrOK<T>(_ p: UnsafeMutablePointer<T>?) -> Bool {
         NSLog("[TreeNB] TNB_FFI_GUARD_V2 rejected invalid C string pointer \(a)")
         return false
     }
-    // TreeNB[B1t]: 同上，拦截低 32 位是小整数的伪指针（错误码 0x7 等）。
+    // TreeNB[B1err]: 同上，拒绝低地址与高位哨兵。
     let low32 = UInt32(truncatingIfNeeded: a)
     guard low32 >= 0x1000 else {
         NSLog("[TreeNB] TNB_FFI_GUARD_V2 rejected enum-like pointer \(a)")
@@ -1492,6 +1522,125 @@ done
 CSTR_LEFT=$(grep -cE 'String\(cString: ' "$IDVG" "$LIBG" | awk -F: '{s+=$2} END{print s+0}')
 [ "$CSTR_LEFT" -le 4 ] || { echo "FATAL[B1n]: 仍有 $CSTR_LEFT 处未保护的 String(cString:)" >&2; exit 2; }
 ok "B1n: FFI 野指针防御已注入（String(cString:)/validatingUTF8/free 全量保护）"
+
+# B1err. IdeviceFfiError 结构体入口防护 —— 修描述文件安装时 err=-1 的 SIGSEGV。
+#     A7 消除 C/Rust misagent ABI 冲突；本层额外保证任何 FFI 错误返回 -1/野指针时，
+#     只生成 Swift 错误，不再解引用或把它交给 idevice_error_free。
+python3 - "$IDVG" <<'PYB1ERR'
+import re
+import sys
+
+path = sys.argv[1]
+s = open(path, encoding='utf-8').read()
+
+def replace_function(source, name, replacement):
+    pattern = rf'(?m)^    private func {name}\b[\s\S]*?^    \}}\n'
+    replaced, count = re.subn(pattern, replacement, source, count=1)
+    if count != 1:
+        raise SystemExit(f'FATAL[B1err]: {name} function anchor missing in {path}')
+    return replaced
+
+if '// ===== TreeNB[B1err] IdeviceFfiError 入口校验 =====' not in s:
+    s = replace_function(s, 'safeFreeError', '''    private func safeFreeError(_ err: UnsafeMutablePointer<IdeviceFfiError>?) {
+        guard let err, tnbPtrOK(err) else { return }
+        idevice_error_free(err)
+    }
+''')
+    s = replace_function(s, 'getErrorMessage', '''    private func getErrorMessage(from err: UnsafeMutablePointer<IdeviceFfiError>) -> String {
+        let snapshot = tnbReadFFIError(err)
+        if let msgPtr = snapshot.message {
+            let message = tnbSafeCString(msgPtr).cleanedErrorFormatting
+            if !message.isEmpty { return message }
+        }
+        return "Error code \\(snapshot.code)"
+    }
+''')
+    s = re.sub(r'\b([A-Za-z_][A-Za-z0-9_]*Err|\berr)\.pointee\b', r'tnbReadFFIError(\1)', s)
+    s = re.sub(r'(?<![A-Za-z0-9_])idevice_error_free\(', 'safeFreeError(', s)
+    s = replace_function(s, 'safeFreeError', '''    private func safeFreeError(_ err: UnsafeMutablePointer<IdeviceFfiError>?) {
+        guard let err, tnbPtrOK(err) else { return }
+        idevice_error_free(err)
+    }
+''')
+    if re.search(r'\b([A-Za-z_][A-Za-z0-9_]*Err|\berr)\.pointee\b', s):
+        raise SystemExit('FATAL[B1err]: direct IdeviceFfiError dereference remains')
+    helper = r'''
+
+// ===== TreeNB[B1err] IdeviceFfiError 入口校验 =====
+private struct TNBFFIErrorSnapshot {
+    let code: Int32
+    let subCode: Int32
+    let message: UnsafeMutablePointer<CChar>?
+}
+
+@inline(__always)
+private func tnbReadFFIError(
+    _ err: UnsafeMutablePointer<IdeviceFfiError>?
+) -> TNBFFIErrorSnapshot {
+    guard let err, tnbPtrOK(err) else {
+        NSLog("[TreeNB] TNB_FFI_GUARD_B1ERR rejected invalid IdeviceFfiError pointer")
+        return TNBFFIErrorSnapshot(code: -1, subCode: 0, message: nil)
+    }
+    return TNBFFIErrorSnapshot(
+        code: err.pointee.code,
+        subCode: err.pointee.sub_code,
+        message: err.pointee.message
+    )
+}
+// ===== /TreeNB[B1err] =====
+'''
+    s = s.rstrip() + '\n' + helper
+    open(path, 'w', encoding='utf-8').write(s)
+
+s = open(path, encoding='utf-8').read()
+if re.search(r'\b[A-Za-z_][A-Za-z0-9_]*Err\.pointee\b', s):
+    raise SystemExit('FATAL[B1err]: direct IdeviceFfiError dereference remains')
+if len(re.findall(r'(?<![A-Za-z0-9_])idevice_error_free\(', s)) != 1:
+    raise SystemExit('FATAL[B1err]: idevice_error_free must exist only inside guarded safeFreeError')
+PYB1ERR
+grep -q 'tnbReadFFIError' "$IDVG" \
+  || { echo "FATAL[B1err]: 错误结构体快照未注入" >&2; exit 2; }
+grep -q 'tnbPtrOK(err)' "$IDVG" \
+  || { echo "FATAL[B1err]: 错误结构体释放未校验" >&2; exit 2; }
+ok "B1err: 所有 IdeviceFfiError 读取与释放均先校验结构体指针"
+
+# B1diag. 主包侧载管线错误也写入独立诊断日志。LoggedError 是安装/重签/刷新等
+# 操作的最终错误落点，覆盖 OperationError 8 与描述文件安装失败；容器 Bridge 的
+# guest 日志继续负责启动、冷接管和容器内部错误。两条链路写入同一个可导出文件。
+LOGGED_ERROR="$SSS/AltStore/Core/Model/LoggedError.swift"
+[ -f "$LOGGED_ERROR" ] || { echo "FATAL[B1diag]: 缺少 $LOGGED_ERROR" >&2; exit 2; }
+python3 - "$LOGGED_ERROR" <<'PYB1DIAG'
+import sys
+
+path = sys.argv[1]
+s = open(path, encoding='utf-8').read()
+if 'import LiveContainerShared' not in s:
+    if 'import CoreData\n' not in s:
+        raise SystemExit('FATAL[B1diag]: CoreData import anchor missing')
+    s = s.replace('import CoreData\n', 'import CoreData\nimport LiveContainerShared\n', 1)
+anchor = '        let nsError = error as NSError\n'
+if anchor not in s:
+    raise SystemExit('FATAL[B1diag]: NSError conversion anchor missing')
+injection = '''        let nsError = error as NSError
+        let diagnosticStage = "sideload.\\(operation?.rawValue ?? "unknown")"
+        LCEngineEntry.recordGuestDiagnostic(
+            diagnosticStage,
+            detail: String(format: "app=%@ bundle=%@ domain=%@ code=%ld — %@",
+                          app.name, app.bundleIdentifier, nsError.domain, nsError.code,
+                          nsError.localizedDescription)
+        )
+'''
+if 'TreeNB[B1diag]' not in s:
+    s = s.replace(anchor, injection, 1)
+    s = s.replace('        self.date = date\n',
+                  '        // TreeNB[B1diag]: side-load and guest failures share one exportable log.\n        self.date = date\n', 1)
+open(path, 'w', encoding='utf-8').write(s)
+if s.count('LCEngineEntry.recordGuestDiagnostic(') != 1:
+    raise SystemExit('FATAL[B1diag]: diagnostic hook count is not one')
+PYB1DIAG
+grep -q 'TreeNB\[B1diag\]' "$LOGGED_ERROR" \
+  || { echo "FATAL[B1diag]: 侧载错误日志钩子未写入" >&2; exit 2; }
+ok "B1diag: 侧载管线最终错误已接入独立脱敏日志"
 
 # B1o. 品牌全量统一 —— openSSS → 🌲TreeNB（2026-11-27 真机截图反馈）
 # ---------------------------------------------------------------------------
@@ -2169,10 +2318,32 @@ if 'com.treenb.idevice.ffi' not in s:
     if old not in s:
         raise SystemExit('FATAL[B1t]: stop 锚点缺失')
     s = s.replace(old, new, 1)
-    pairing_cleanup = '            defer { safeFreeError(provErr) }\n'
-    if s.count(pairing_cleanup) != 2:
-        raise SystemExit('FATAL[B1t]: TCP provider 创建失败锚点数量异常')
-    s = s.replace(pairing_cleanup, pairing_cleanup + '            idevice_pairing_file_free(tempPairingFile)\n')
+    import re
+    pairing_pattern = re.compile(
+        r'(        guard let tempPairingFile = tempPairingFile else \{\n'
+        r'            throw IdeviceGatewayError\(\.connectionFailed, reason: "Temporary pairing file was nil"\)\n'
+        r'        \}\n)'
+        r'([\s\S]*?)'
+        r'(        var providerToFree: OpaquePointer\? = provider\n)'
+    )
+    def pairing_owner(match):
+        return (
+            match.group(1)
+            + '\n        // TreeNB[B1t]: provider 创建失败或返回 nil 时仍由本函数释放配对文件；\n'
+            + '        // 只有 provider 成功创建后才把所有权交给 provider。\n'
+            + '        var providerOwnsPairingFile = false\n'
+            + '        defer {\n'
+            + '            if !providerOwnsPairingFile {\n'
+            + '                idevice_pairing_file_free(tempPairingFile)\n'
+            + '            }\n'
+            + '        }\n'
+            + match.group(2)
+            + '        providerOwnsPairingFile = true\n'
+            + match.group(3)
+        )
+    s, pairing_count = pairing_pattern.subn(pairing_owner, s)
+    if pairing_count != 2:
+        raise SystemExit(f'FATAL[B1t]: TCP provider 临时配对文件锚点数量异常: {pairing_count}')
     s = s.replace('try await withFFIDispatch {', 'try await withGatewayFFI {')
     open(p, 'w', encoding='utf-8').write(s)
     print('  B1t patched: IdeviceGateway.swift (serial FFI + pairing-file failure cleanup)')
@@ -2470,10 +2641,10 @@ ok "安卓 APK 入口已在树🌲应用 Tab 加号（已校验）"
 # D. 身份归一：bundle id / App Group（报告 §3.6）
 # ---------------------------------------------------------------------------
 log "D. 身份归一（bundle id / App Group / URL scheme）"
-grep -rl "com.kdt.livecontainer.treeWidget" "$LC/TreeWidget" 2>/dev/null | while read -r f; do
+while read -r f; do
   sed -i '' 's/com\.kdt\.livecontainer\.treeWidget/com.openssai.app.treeWidget/g' "$f" 2>/dev/null || \
   sed -i 's/com\.kdt\.livecontainer\.treeWidget/com.openssai.app.treeWidget/g' "$f"
-done
+done < <(grep -rl "com.kdt.livecontainer.treeWidget" "$LC/TreeWidget" 2>/dev/null || true)
 ok "Widget Keychain service 已归一为 com.openssai.app.treeWidget"
 
 # ---------------------------------------------------------------------------

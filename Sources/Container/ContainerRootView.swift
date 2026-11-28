@@ -20,6 +20,7 @@ struct ContainerRootView: View {
     @State private var showWidgetSettings = false
     @State private var showCertificate = false
     @State private var showAccountVault = false
+    @State private var showDiagnostics = false
     @State private var showImportMenu = false
     @State private var showAPK = false
     @State private var showBootstrap = false
@@ -88,6 +89,11 @@ struct ContainerRootView: View {
                         } label: {
                             Label("Apple ID 证书", systemImage: "person.2.badge.key.fill")
                         }
+                        SwiftUI.Button {
+                            showDiagnostics = true
+                        } label: {
+                            Label("错误对照与日志", systemImage: "doc.text.magnifyingglass")
+                        }
                         Divider()
                         SwiftUI.Button {
                             showImportMenu = true
@@ -138,6 +144,16 @@ struct ContainerRootView: View {
                         }
                 }
             }
+            .sheet(isPresented: $showDiagnostics) {
+                AdaptiveNavigation {
+                    TNBErrorGuideView()
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                SwiftUI.Button("完成") { showDiagnostics = false }
+                            }
+                        }
+                }
+            }
             .sheet(isPresented: $showAPK) {
                 AdaptiveNavigation {
                     HuskyAPKView()
@@ -162,6 +178,7 @@ struct ContainerRootView: View {
                 get: { model.lastError != nil },
                 set: { if !$0 { model.lastError = nil } }
             )) {
+                SwiftUI.Button("查看对照与日志") { showDiagnostics = true }
                 SwiftUI.Button("好", role: .cancel) {}
             } message: {
                 Text(model.lastError ?? "")

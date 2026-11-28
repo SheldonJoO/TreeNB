@@ -139,6 +139,8 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
 @property (nonatomic, strong) NSURL *bundleRoot;       // Documents/Applications
 @property (nonatomic, strong) NSURL *groupBundleRoot;  // AppGroup/LiveContainer/Applications
 @property (nonatomic, assign) BOOL swizzledForGuest;
++ (NSString *)tnbSanitizedDiagnostic:(NSString *)value;
++ (void)recordGuestLaunchHeader:(NSString *)bundleName container:(NSString *)container;
 @end
 
 @implementation LCEngineEntry
@@ -150,6 +152,96 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         instance = [[self alloc] init];
     });
     return instance;
+}
+
+#pragma mark - Guest diagnostics
+
++ (NSString *)tnbSanitizedDiagnostic:(NSString *)value {
+    NSString *text = value ?: @"";
+    NSArray<NSRegularExpression *> *patterns = @[
+        [NSRegularExpression regularExpressionWithPattern:@"(?i)bearer\\s+[A-Za-z0-9._~+/=-]+"
+                                                     options:0 error:nil],
+        [NSRegularExpression regularExpressionWithPattern:
+            @"(?i)(password|passwd|pwd|xcode[_-]?token|access[_-]?token|refresh[_-]?token|token|adsid|authorization|private[_-]?key|secret)(\\s*[:=]\\s*)[^\\r\\n]+"
+                                                     options:0 error:nil]
+    ];
+    for (NSRegularExpression *pattern in patterns) {
+        text = [pattern stringByReplacingMatchesInString:text
+                                                  options:0
+                                                    range:NSMakeRange(0, text.length)
+                                             withTemplate:@"$1$2[已隐藏]"];
+    }
+    return text;
+}
+
++ (NSURL *)guestLogFileURL {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSURL *logURL = [[NSURL fileURLWithPath:docs] URLByAppendingPathComponent:@"TreeNB-Diagnostics/guest-launch.log"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtURL:logURL.URLByDeletingLastPathComponent
+      withIntermediateDirectories:YES attributes:nil error:nil];
+    if (![fm fileExistsAtPath:logURL.path]) {
+        [@"TreeNB 侧载与 guest 诊断日志\n" writeToURL:logURL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+    return logURL;
+}
+
++ (void)recordGuestDiagnostic:(NSString *)event detail:(NSString *)detail {
+    @synchronized (self) {
+        NSURL *logURL = [self guestLogFileURL];
+        NSFileManager *fm = NSFileManager.defaultManager;
+        [fm createDirectoryAtURL:logURL.URLByDeletingLastPathComponent
+      withIntermediateDirectories:YES attributes:nil error:nil];
+        if ([fm fileExistsAtPath:logURL.path] && [fm attributesOfItemAtPath:logURL.path error:nil].fileSize > 512 * 1024) {
+            NSURL *previous = [[logURL URLByDeletingPathExtension] URLByAppendingPathExtension:@"previous.log"];
+            [fm removeItemAtURL:previous error:nil];
+            [fm moveItemAtURL:logURL toURL:previous error:nil];
+        }
+        if (![fm fileExistsAtPath:logURL.path]) {
+            [@"TreeNB 侧载与 guest 诊断日志\n" writeToURL:logURL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+        NSISO8601DateFormatter *formatter = [[NSISO8601DateFormatter alloc] init];
+        NSString *eventText = [[self tnbSanitizedDiagnostic:event] stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        NSString *detailText = [self tnbSanitizedDiagnostic:detail];
+        NSString *line = [NSString stringWithFormat:@"%@ [%@] %@\n", [formatter stringFromDate:[NSDate date]],
+                          eventText, detailText.length ? [NSString stringWithFormat:@"— %@", detailText] : @""];
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:logURL.path];
+        [handle seekToEndOfFile];
+        [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle closeFile];
+        NSLog(@"[TreeNB][GuestLog] %@ %@", eventText, detailText);
+    }
+}
+
++ (void)recordGuestError:(NSError *)error stage:(NSString *)stage {
+    NSString *detail = [NSString stringWithFormat:@"domain=%@ code=%ld — %@",
+                        error.domain, (long)error.code, error.localizedDescription];
+    [self recordGuestDiagnostic:stage detail:detail];
+}
+
++ (NSString *)guestLogText {
+    @synchronized (self) {
+        return [NSString stringWithContentsOfURL:[self guestLogFileURL] encoding:NSUTF8StringEncoding error:nil] ?: @"暂无诊断日志。";
+    }
+}
+
++ (void)clearGuestLog {
+    @synchronized (self) {
+        NSURL *url = [self guestLogFileURL];
+        NSURL *previous = [[url URLByDeletingPathExtension] URLByAppendingPathExtension:@"previous.log"];
+        [NSFileManager.defaultManager removeItemAtURL:url error:nil];
+        [NSFileManager.defaultManager removeItemAtURL:previous error:nil];
+    }
+}
+
++ (void)recordGuestLaunchHeader:(NSString *)bundleName container:(NSString *)container {
+    NSDictionary *info = NSBundle.mainBundle.infoDictionary ?: @{};
+    NSString *version = [NSString stringWithFormat:@"%@ (%@)", info[@"CFBundleShortVersionString"] ?: @"?",
+                         info[@"CFBundleVersion"] ?: @"?"];
+    [self recordGuestDiagnostic:@"launch.begin"
+                         detail:[NSString stringWithFormat:@"guest=%@ container=%@ host=%@ os=%@ team=%@",
+                                 bundleName ?: @"?", container ?: @"默认", version,
+                                 UIDevice.currentDevice.systemVersion, [LCSharedUtils teamIdentifier] ?: @"未知"]];
 }
 
 #pragma mark - Guest 运行前置条件（TweakLoader symlink + 证书自动导入）
@@ -167,6 +259,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     NSString *target = [[NSBundle mainBundle].bundlePath
         stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"];
     if (![fm fileExistsAtPath:target]) {
+        [self recordGuestDiagnostic:@"preflight.tweakloader.missing" detail:target];
         NSLog(@"[TreeNB] 严重：包内缺少 Frameworks/TweakLoader.dylib，guest 无法启动");
         [[NSUserDefaults standardUserDefaults] setObject:@"包内缺少 TweakLoader.dylib，请重装完整包"
                                                  forKey:@"TNBLastGuestLaunchError"];
@@ -192,6 +285,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
             [fm removeItemAtPath:link error:nil];
             NSError *err = nil;
             if (![fm createSymbolicLinkAtPath:link withDestinationPath:target error:&err]) {
+                [self recordGuestError:err stage:@"preflight.tweakloader.symlink"];
                 NSLog(@"[TreeNB] TweakLoader symlink 建立失败 %@: %@", link, err.localizedDescription);
             } else {
                 NSLog(@"[TreeNB] TweakLoader symlink 已建立 -> %@", target);
@@ -231,10 +325,16 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
             if ([[p lastPathComponent] hasPrefix:@"TreeNBSigningCertificate"]) { path = p; break; }
         }
     }
-    if (!path.length) { NSLog(@"[TreeNB] 未找到任何内置证书"); return; }
+    if (!path.length) {
+        [self recordGuestDiagnostic:@"preflight.certificate.missing" detail:@"未找到内置签名证书"];
+        NSLog(@"[TreeNB] 未找到任何内置证书"); return;
+    }
 
     NSData *p12 = [NSData dataWithContentsOfFile:path];
-    if (!p12.length) { return; }
+    if (!p12.length) {
+        [self recordGuestDiagnostic:@"preflight.certificate.empty" detail:path.lastPathComponent];
+        return;
+    }
 
     // 已导入的就是目标证书（且 team 没变）→ 不重复导入、不重签。
     NSData *existing = [[self tnb_certDefaults] objectForKey:kTNBKeyCertData] ?:
@@ -250,6 +350,8 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"TNBAutoResignPending"];
     NSLog(@"[TreeNB] 已自动导入内置证书 %@ (%lu bytes)",
           [path lastPathComponent], (unsigned long)p12.length);
+    [self recordGuestDiagnostic:@"preflight.certificate.imported"
+                         detail:[NSString stringWithFormat:@"team=%@ bytes=%lu", team ?: @"未知", (unsigned long)p12.length]];
 }
 
 /// 自动导入证书后的首次启动，用该证书把已装 guest 重签一次（异步，不阻塞 UI）。
@@ -260,6 +362,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     NSArray<NSString *> *guests = [self installedGuestBundleNames] ?: @[];
     if (guests.count == 0) { return; }
     [LCEngineEntry resignAllGuestsWithCompletion:^(BOOL success, NSString *detail) {
+        [LCEngineEntry recordGuestDiagnostic:success ? @"resign.success" : @"resign.failed" detail:detail];
         NSLog(@"[TreeNB] 自动重签结果: %@ / %@", success ? @"OK" : @"FAIL", detail);
         if (!success) {
             [[NSUserDefaults standardUserDefaults]
@@ -364,6 +467,9 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         return NO;
     }
 
+    [self recordGuestLaunchHeader:selected
+                         container:[defaults stringForKey:@"selectedContainer"] ?: @"默认"];
+
     // ★ 新鲜度门禁：selected 可能是上次 guest 退出后残留的旧值。widget 深链冷启
     //   时 URL 还没到 SceneDelegate，若在这里直接接管就会误进"上次打开的 App"。
     //   只认 15 秒内由 launchGuestApp 写入的意图标记；过期则视为残留，清掉并返回 NO，
@@ -372,6 +478,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     NSTimeInterval ts = [tsObj isKindOfClass:[NSNumber class]] ? [tsObj doubleValue] : 0;
     NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - ts;
     if (ts <= 0 || age > 15) {
+        [self recordGuestDiagnostic:@"cold.stale_intent" detail:[NSString stringWithFormat:@"selected=%@ age=%.1fs", selected, age]];
         NSLog(@"[TreeNB] 冷启动放弃残留 selected=%@ (age=%.1fs)，交还宿主等深链", selected, age);
         [defaults removeObjectForKey:@"selected"];
         [defaults removeObjectForKey:@"selectedContainer"];
@@ -391,6 +498,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     NSString *appInfoPath = [guestApp stringByAppendingPathComponent:@"LCAppInfo.plist"];
     NSDictionary *guestInfo = [NSDictionary dictionaryWithContentsOfFile:appInfoPath];
     if (!guestInfo || guestInfo[@"LCDataUUID"] == nil) {
+        [self recordGuestDiagnostic:@"cold.metadata_missing" detail:appInfoPath];
         NSLog(@"[TreeNB] 冷启动接管放弃：guest 元数据缺失 (%@)", appInfoPath);
         [defaults removeObjectForKey:@"selected"];
         [defaults removeObjectForKey:@"selectedContainer"];
@@ -400,6 +508,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
 
     TNBLCMainFn lcMain = (TNBLCMainFn)dlsym(RTLD_DEFAULT, "LiveContainerMain");
     if (!lcMain) {
+        [self recordGuestDiagnostic:@"cold.symbol_missing" detail:@"LiveContainerMain"];
         NSLog(@"[TreeNB] 冷启动接管失败：找不到 LiveContainerMain 符号");
         [defaults removeObjectForKey:@"selected"];
         [defaults removeObjectForKey:@"selectedContainer"];
@@ -414,6 +523,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     int argc = 1;
     char *argv[] = { "TreeNB", NULL };
     int result = lcMain(argc, argv);
+    [self recordGuestDiagnostic:@"cold.returned" detail:[NSString stringWithFormat:@"LiveContainerMain=%d", result]];
     NSLog(@"[TreeNB] LiveContainerMain 返回 %d（未交出进程，回落宿主 UI）", result);
 
     // ★ 透传 guest 启动失败的真实原因到 UI：上游 invokeAppMain 失败时把错误写进
@@ -421,6 +531,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     //   Swift 容器页在 refresh 时读取并展示 TNBLastGuestLaunchError。
     NSString *guestError = [defaults stringForKey:@"error"];
     if (guestError.length) {
+        [self recordGuestDiagnostic:@"cold.upstream_error" detail:guestError];
         [defaults setObject:guestError forKey:@"TNBLastGuestLaunchError"];
         [defaults removeObjectForKey:@"error"];
         NSLog(@"[TreeNB] guest 启动失败原因: %@", guestError);
@@ -504,12 +615,15 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         if (![self bootstrapWithError:error]) { return NO; }
     }
 
+    [LCEngineEntry recordGuestLaunchHeader:bundleName container:containerFolderName ?: @"默认"];
+
     // 确认 guest 存在
     NSURL *appPath = [self.bundleRoot URLByAppendingPathComponent:bundleName isDirectory:YES];
     if (![[NSFileManager defaultManager] fileExistsAtPath:appPath.path]) {
         appPath = [self.groupBundleRoot URLByAppendingPathComponent:bundleName isDirectory:YES];
     }
     if (![[NSFileManager defaultManager] fileExistsAtPath:appPath.path]) {
+        [LCEngineEntry recordGuestDiagnostic:@"launch.guest_missing" detail:bundleName];
         if (error) {
             *error = [NSError errorWithDomain:TNBEngineErrorDomain code:4
                                     userInfo:@{NSLocalizedDescriptionKey:
@@ -565,6 +679,9 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     //   3) 重启后 AppDelegate 冷启动钩子调 LiveContainerMain → invokeAppMain → guest。
     // 正常成功时本进程被 SIGKILL，此行之后不会执行。
     BOOL launched = [LCSharedUtils launchToGuestAppWithClassicMode:effectiveClassic];
+    [LCEngineEntry recordGuestDiagnostic:launched ? @"launch.restart_requested" : @"launch.restart_failed"
+                         detail:[NSString stringWithFormat:@"bundle=%@ container=%@ classic=%lu",
+                                 bundleName, dataUUID, (unsigned long)effectiveClassic]];
     if (!launched) {
         // 没触发重启：清理状态，避免下次冷启动误进 guest。
         [self restoreAfterGuestExit];
@@ -708,6 +825,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
         //     app 已落盘且元数据齐全，用户配好 JIT/证书后可再强制签名启动。
         [appInfo patchExecAndSignIfNeedWithCompletionHandler:^(bool success, NSString *errorInfo) {
             if (!success) {
+                [LCEngineEntry recordGuestDiagnostic:@"install.patch_or_sign_failed" detail:errorInfo];
                 NSLog(@"[TreeNB] 警告: patch/签名未完全成功: %@（可配置 JIT/证书后重试）", errorInfo);
             }
             if (progress) { progress(@"完成", 1.0); }
@@ -846,6 +964,7 @@ static NSString *TNBSanitizedBundleName(NSString *identifier) {
     } forceSign:YES];
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(120 * NSEC_PER_SEC)));
     if (!signedOK && error) {
+        [LCEngineEntry recordGuestDiagnostic:@"sign.failed" detail:signErr ?: @"ZSign 签名失败"];
         *error = [NSError errorWithDomain:TNBEngineErrorDomain code:8
                                 userInfo:@{NSLocalizedDescriptionKey:
                                     signErr ?: @"ZSign 签名失败，请检查证书是否过期/有效"}];
