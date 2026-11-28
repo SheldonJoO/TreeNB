@@ -3,9 +3,9 @@
 **一个 IPA，装完就是完整的侧载环境 —— 签名、续签、多 App 容器、小组件，全在这一个 App 里，零跳转。**
 
 > 把 openSSS 的手机端签名内核、LiveContainer 的多 App 容器、TreeWidget 小组件，揉进同一个 App。
-> 首次安装**不需要电脑、不需要 SideInstaller、不需要先装别的 App**——打开网页、复制一条命令、登录 Apple ID，装完即用。
+> 首次安装**不需要电脑常驻、不需要 SideInstaller**；免电脑路径需要 Open Minis 与 LocalDevVPN 作为启动环境，打开网页、复制一条命令、登录 Apple ID，装完即用。
 
-[⬇️ 下载 IPA](https://github.com/SheldonJoO/TreeNB/releases/latest) · [📦 免电脑安装](https://treenb-install.app.workbuddy.host/?sharecode=5Z4WZDFFYR) · [💬 反馈 Issue](https://github.com/SheldonJoO/TreeNB/issues)
+[⬇️ 下载 IPA](https://github.com/SheldonJoO/TreeNB/releases/latest) · [📦 免电脑安装](https://TreeNB.idoer.help/) · [💬 反馈 Issue](https://github.com/SheldonJoO/TreeNB/issues)
 
 ---
 
@@ -15,8 +15,8 @@
 
 TreeNB 的解法：
 
-- **单包合一** —— openSSS 做主壳（Apps / 定位 / 树应用 / 我的四个 Tab），LiveContainer 降级成内嵌 framework，容器 Tab 就在 App 里，点开 guest 不再跳出宿主。
-- **免电脑首次安装** —— 网页生成一条命令，在「Open Minis」里粘贴，本地网页登录 Apple ID、自配对、签名、安装一条龙。全程不依赖任何第三方安装器。
+- **单包合一** —— openSSS 做主壳（Apps / 定位 / 树应用 / 我的四个 Tab），LiveContainer 降级成内嵌 framework，容器 Tab 就在 App 里；guest 启动仍可能重开进程，由冷启动入口接管。
+- **免电脑首次安装** —— 网页生成一条命令，在「Open Minis」里粘贴，本地网页登录 Apple ID、自配对、签名、安装一条龙。全程不依赖 SideInstaller。
 - **签名权留在手机上** —— 免费 Apple ID 就能签，7 天到期后台自动续；anisette 多服务器轮换，证书满/握手失败能自动切换。
 - **中文是一等公民** —— 界面第一语言就是中文（`CFBundleDevelopmentRegion = zh-Hans`），不是英文之上的翻译补丁。
 - **小组件直达** —— TreeWidget 已并入同一个包，从桌面小组件一键打开容器里的 App，配品牌过渡层遮住中间页面。
@@ -40,32 +40,34 @@ TreeNB 的解法：
 
 ## 📦 首次安装（免电脑）
 
-1. 用 iPhone 的 Safari 打开 **[免电脑安装页](https://treenb-install.app.workbuddy.host/?sharecode=5Z4WZDFFYR)**
+1. 用 iPhone 的 Safari 打开 **[免电脑安装页](https://TreeNB.idoer.help/)**
 2. 按页面提示复制那条命令
 3. 在 **Open Minis**（一个在 iOS 上跑 aarch64 Linux 的开源终端）里粘贴执行
 4. 终端会拉起一个**本地网页** → 在里面登录 Apple ID、过 2FA
 5. 按网页指引打开系统「开发者选项」，用 **TreeNB 生成的配对码**完成自配对（方向是：TreeNB 生成码 → 你输入到系统设置里）
 6. 网页自动签名并安装 TreeNB，装完打开即用
 
-> ⚠️ 整个过程不需要电脑、不需要 SideInstaller、不需要先装别的 App。 pairing file 与证书都留在设备本机。
+> 提示：Open Minis 已从 App Store 下架；已安装的用户仍可继续使用上面的流程。
+> 免电脑路径需要 Open Minis 与 LocalDevVPN；配对文件与证书留在设备本机，TreeNB 发布站不接收账号凭据。
 > 若某个 anisette 服务器登录失败，引擎会自动轮换到下一个；目前实测 `ani.jkcoxson.com` 可用。
 
 ---
 
 ## 🔨 从源码构建
 
-要求：macOS 15.3+ / Xcode 16.4（本机达不到请用 CI）。
+要求：macOS 26 / Xcode 26（1307 使用 iOS 26 SDK；本机达不到请用 CI）。
 
 ```bash
 ./scripts/prepare_dependencies.sh   # 拉上游 → 打补丁 → xcodegen generate
 xcodebuild archive -project TreeNB.xcodeproj -scheme TreeNB-App \
   -archivePath build/TreeNB.xcarchive -sdk iphoneos -arch arm64 \
-  -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+  -configuration Release OTHER_LDFLAGS='$(inherited) -ld_classic' \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 ./scripts/assemble_ipa.sh
 ```
 
-> scheme 名是 `TreeNB-App`（不是 `TreeNB`）——避免与同名 target 冲突导致空 archive。
-> 构建踩坑见 `docs/CI构建踩坑记录.md`。
+> Scheme 名是 `TreeNB-App`（不是 `TreeNB`）——避免与同名 target 冲突导致空 archive。
+> 1307 固定使用 Xcode 26 + `-ld_classic`，不切换到 Xcode 27；构建踩坑见 `docs/CI构建踩坑记录.md`。
 
 ### 引擎（bootstrap）自检
 
@@ -76,6 +78,13 @@ cd bootstrap-engine
 ./check-build.sh              # lock 一致性 + 精确版本 + 编译可行性
 ./check-build.sh --lock-only  # CI 用，跳过编译
 ```
+
+### 在线更新服务
+
+- 正式清单：`https://TreeNB.idoer.help/updates/latest.json`
+- 1307 安装包：`https://TreeNB.idoer.help/downloads/TreeNB-202611281307-unsigned.ipa`
+- 1307 只发布服务端清单和 unsigned IPA，不包含 App 内更新客户端。
+- 下一版客户端按 `docs/在线更新服务协议.md` 校验版本、字节数和 SHA256，再使用当前账号既有证书在本机重签安装；服务器不接收 Apple ID、证书或私钥。
 
 ---
 
