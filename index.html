@@ -346,6 +346,51 @@
   }
   .privacy .lock { color: var(--green); font-size: 20px; line-height: 1.3; }
   .privacy strong { color: var(--green-soft); }
+  .support {
+    margin-top: 16px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .support-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(270px, .9fr);
+  }
+  .support-link, .donation {
+    min-width: 0;
+    min-height: 118px;
+    padding: 16px;
+    border-right: 1px solid var(--line);
+    color: var(--green-soft);
+    text-decoration: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .support-link:last-of-type { border-right: 0; }
+  .support-link:hover { background: rgba(85, 255, 136, .05); }
+  .support-link small, .donation small { color: var(--muted); font-size: 10px; letter-spacing: .08em; }
+  .support-link b { color: var(--ink); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+  .support-link .arrow { color: var(--green); font-size: 16px; align-self: flex-end; }
+  .donation {
+    border-right: 0;
+    min-height: 150px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    text-decoration: none;
+  }
+  .donation img {
+    display: block;
+    width: 132px;
+    height: 132px;
+    object-fit: contain;
+    background: #fff;
+    border: 4px solid #fff;
+  }
+  .donation-copy { display: grid; gap: 4px; }
+  .donation-copy strong { color: var(--green-soft); font-size: 13px; font-weight: 600; }
   footer {
     display: flex;
     justify-content: space-between;
@@ -364,6 +409,11 @@
     .workspace { grid-template-columns: minmax(220px, .8fr) minmax(390px, 1.7fr); grid-template-areas: "preflight execution" "artifact execution"; }
     .artifact .panel-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
     .artifact .downloads { grid-column: 1 / -1; grid-template-columns: 1fr 1fr; }
+    .support-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .support-link { border-bottom: 1px solid var(--line); }
+    .support-link:nth-child(2) { border-right: 0; }
+    .support-link:nth-child(3) { border-right: 1px solid var(--line); }
+    .support-link:nth-child(3), .donation { border-bottom: 0; }
   }
   @media (max-width: 780px) {
     body { padding-left: 12px; padding-right: 12px; }
@@ -378,6 +428,10 @@
     .command { font-size: 10px; }
     .actions { grid-template-columns: 1fr; }
     .btn { min-height: 46px; }
+  }
+  @media (max-width: 600px) {
+    .support-link:nth-child(3) { grid-column: 1 / -1; border-right: 0; }
+    .donation { grid-column: 1 / -1; border-top: 1px solid var(--line); }
   }
   @media (max-width: 390px) {
     .brand-text { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -530,6 +584,25 @@
     <span class="lock" aria-hidden="true">⌁</span>
     <div><strong>LOCAL ONLY // 凭证边界</strong><br>Apple ID、密码、证书与私钥不会发送到 TreeNB 发布站。免电脑侧载需要 Open Minis 和 LocalDevVPN 作为“种子”，这是 Apple 对 App 自签名安装的限制。</div>
   </div>
+
+  <section class="support" aria-labelledby="support-title">
+    <div class="panel-head"><span id="support-title">04 // 支持与动力</span><small>SUPPORT &amp; POWER</small></div>
+    <div class="support-grid">
+      <a class="support-link" href="https://github.com/SheldonJoO/TreeNB">
+        <small>项目地址</small><b>github.com/SheldonJoO/TreeNB</b><span class="arrow">↗</span>
+      </a>
+      <a class="support-link" href="https://github.com/SheldonJoO" rel="me">
+        <small>GitHub 账号</small><b>@SheldonJoO</b><span class="arrow">↗</span>
+      </a>
+      <a class="support-link" href="https://x.com/SheldonJo_O" rel="me">
+        <small>X 账号</small><b>@SheldonJo_O</b><span class="arrow">↗</span>
+      </a>
+      <a class="donation" href="assets/support-qr.png" aria-label="查看微信打赏码">
+        <img src="assets/support-qr.png" alt="微信打赏码" width="132" height="132">
+        <span class="donation-copy"><small>微信扫码 · 自愿支持</small><strong>支持与动力</strong></span>
+      </a>
+    </div>
+  </section>
 
   <footer>
     <span>TreeNB Ⅱ v1.4.6 · OPEN SOURCE · BUILD 202611281307</span>
