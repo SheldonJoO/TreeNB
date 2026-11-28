@@ -1,4 +1,4 @@
-# 🌲 TreeNB（TreeNewBee Ⅱ · 树应用）
+# 🌲树应用 | TreeNewBee Ⅱ，为完美侧载而生。
 
 **一个 IPA，装完就是完整的侧载环境 —— 签名、续签、多 App 容器、小组件，全在这一个 App 里，零跳转。**
 
@@ -6,6 +6,43 @@
 > 首次安装**不需要电脑常驻、不需要 SideInstaller**；免电脑路径需要 Open Minis 与 LocalDevVPN 作为启动环境，打开网页、复制一条命令、登录 Apple ID，装完即用。
 
 [⬇️ 下载 IPA](https://github.com/SheldonJoO/TreeNB/releases/latest) · [📦 免电脑安装](https://TreeNB.idoer.help/) · [💬 反馈 Issue](https://github.com/SheldonJoO/TreeNB/issues)
+
+---
+
+## 🙏🏻 首先，严重感谢各家开源大佬
+
+TreeNB 不是从零开始的。下面这些项目与开发者，奠定了侧载、容器、签名、配对和安卓翻译层的基础（排名不分先后）：
+
+| 项目 | 开发者 / 团队 | TreeNB 中的使用 |
+|---|---|---|
+| [openSSS](https://github.com/SheldonJoO/openSSS) | **SheldonJoO** | 主壳、签名 / 续签、Anisette 与中文界面基底 |
+| [TreeNewBee](https://github.com/SheldonJoO/TreeNewBee) | **SheldonJoO** | LiveContainer 衍生容器实现 |
+| [LiveContainer](https://github.com/LiveContainer/LiveContainer) | **LiveContainer project and contributors**，包括 hugeBlack、khanhduytran0 | 多 App 容器、SwiftUI 与多任务实现 |
+| [SideStore](https://github.com/SideStore/SideStore) | **SideStore team and contributors** | 手机端签名、续签与 Anisette 生态地基 |
+| [AltStore](https://github.com/altstoreio/AltStore) | **Riley Testut** | 上游应用模型、应用源与 AltSign 思路 |
+| [Husk](https://github.com/Leviidev/Husk) | **Leviidev** | Husk 安卓翻译层 |
+| [SideSign](https://github.com/SideStore/SideSign)、[CodeSignKit](https://github.com/mahee96/CodeSignKit)、[AnisetteKit](https://github.com/mahee96/AnisetteKit)、[RemotePairingKit](https://github.com/mahee96/RemotePairingKit)、[GSACryptoKit](https://github.com/mahee96/GSACryptoKit) | **mahee96** | 签名、证书、Anisette 与远程配对 |
+| [minimuxer](https://github.com/jkcoxson/minimuxer)、[em_proxy](https://github.com/jkcoxson/em_proxy)、[idevice](https://github.com/jkcoxson/idevice) | **jkcoxson**；minimuxer Swift 实现亦感谢 mahee96、nythepegasus | 设备通信、隧道、配对与安装 |
+| [isideload](https://github.com/nab138/isideload)、[iloader](https://github.com/nab138/iloader) | **nab138** | 免电脑安装引擎与 Apple ID 认证 |
+| [ZSign](https://github.com/zhlynn/zsign)、[Feather](https://github.com/claration/feather) | **zhlynn**、**khcrysalis** 及 LiveContainer 修改者 | guest 重签与签名工具链 |
+| [ElleKit](https://github.com/tealbathingsuit/ellekit) | **Évelyne Bélanger** | 注入与 hook 基础设施 |
+| [ANGLE](https://github.com/google/angle) | **Chromium / WebKit contributors** | Husk 的 OpenGL ES 转换层 |
+| [OpenSSL](https://www.openssl.org) | **OpenSSL team**；iOS packaging 感谢 **krzyzanowskim** | 远程配对与加密 |
+| [swift-crypto](https://github.com/apple/swift-crypto)、[swift-asn1](https://github.com/apple/swift-asn1) | **Apple** | 密码学与证书解析 |
+| [ZIPFoundation](https://github.com/weichsel/ZIPFoundation) | **weichsel** | ZIP 解包 |
+| [litehook](https://github.com/opa334/litehook) | **opa334**；TreeNB 使用 LiveContainer fork | hook 基础设施 |
+| [libdeflate](https://github.com/ebiggers/libdeflate) | **Eric Biggers**；TreeNB 使用 SideStore fork | 压缩与解压 |
+| [apple-codesign-quick](https://docs.rs/apple-codesign-quick/0.1.0/) | **Dadoum** | 安装引擎的 Apple 代码签名 |
+| [stb_vorbis](http://nothings.org/stb_vorbis/) | **Sean Barrett** | Husk 音频解码 |
+
+也感谢这些让免电脑与 JIT 路径真正可用的外部项目：
+
+- [Open Minis](https://github.com/OpenMinis/OpenMinis) —— **OpenMinis team**
+- [LocalDevVPN](https://github.com/jkcoxson/LocalDevVPN) —— **jkcoxson**
+- [StikDebug](https://github.com/StikDebug/StikDebug) —— **StikDebug project / StephenDev0**
+- [SideInstaller](https://github.com/FrizzleM/SideInstaller) —— **FrizzleM**（设计思路启发，未引入其代码）
+
+没有这些工作，就没有 TreeNB。
 
 ---
 
@@ -88,32 +125,6 @@ cd bootstrap-engine
 
 ---
 
-## 🧬 开源血缘
-
-TreeNB 是站在这些项目的肩膀上的，代码与思路来源如下：
-
-| 项目 | 作用 | 许可证 |
-|---|---|---|
-| [openSSS](https://github.com/SheldonJoO/openSSS) | 签名/续签内核、Anisette、JIT、中文界面基底 | AGPLv3 |
-| [SideStore](https://github.com/SideStore/SideStore) | openSSS 的上游：手机端签名与 Anisette 地基 | AGPLv3 |
-| [AltStore](https://github.com/rileytestut/AltStore) | 更上游的原版：应用模型、应用源、AltSign | AGPLv3 |
-| [TreeNewBee / LiveContainer](https://github.com/SheldonJoO/TreeNewBee) | 多 App 容器与翻译层 | — |
-| [isideload](https://github.com/nab138/isideload) | 引擎侧 Apple ID 认证 / 签名 / 安装的 Rust 实现 | MIT |
-| [idevice](https://github.com/jkcoxson/idevice) | 设备配对 / RSD 隧道 / 安装 | MIT |
-| Open Minis | iOS 上跑 aarch64 Linux 的 shell，免电脑安装的执行环境 | — |
-
-本项目以 **AGPL-3.0** 发布。上游的 LICENSE、版权头与署名全部保留，修改处按 AGPLv3 要求标注。
-
----
-
-## 🙏 致谢
-
-**特别鸣谢 [SideInstaller](https://github.com/FrizzleM/SideInstaller)（FrizzleM）** —— TreeNB 的**免电脑首次安装**整体思路（终端拉起本地网页、网页登录 Apple ID、网页自配对）借鉴自该项目。TreeNB 未引入其任何代码，仅受其设计思路启发，在此单独重点致敬。
-
-同时感谢整个开源侧载生态：Riley Testut（AltStore 原作者，一切的起点）、SideStore 全体贡献者、nab138（isideload / iloader）、jkcoxson（idevice / minimuxer），以及 openSSS、LiveContainer、TreeNewBee 的维护与贡献者。没有他们的工作，就没有 TreeNB。
-
----
-
 ## 许可证
 
-AGPL-3.0（与 openSSS / SideStore / AltStore 一致）。
+TreeNB 主项目沿用 openSSS 的 **AGPL-3.0**。Husk 为 **GPL-2.0-or-later**，ElleKit 为 **BSD-3-Clause**，其余第三方组件保留各自许可证、版权头与署名；具体以对应上游 LICENSE 和随包声明为准。
