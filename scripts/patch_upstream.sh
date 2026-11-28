@@ -527,6 +527,22 @@ package = open(package_path, encoding='utf-8').read()
 package = re.sub(
     r'^\s*\.product\(name:\s*"LibimobiledeviceGateway",\s*package:\s*"DeviceGateway"\),?\s*\n',
     '', package, flags=re.MULTILINE)
+if 'github.com/mahee96/RemotePairingKit.git' not in package:
+    package = package.replace(
+        '        .package(path: "DeviceGateway")',
+        '        .package(path: "DeviceGateway"),\n'
+        '        .package(url: "https://github.com/mahee96/RemotePairingKit.git", branch: "main")',
+        1
+    )
+if '.product(name: "OpenSSL", package: "RemotePairingKit")' not in package:
+    package = package.replace(
+        '                .product(name: "IdeviceGateway", package: "DeviceGateway"),',
+        '                .product(name: "IdeviceGateway", package: "DeviceGateway"),\n'
+        '                .product(name: "OpenSSL", package: "RemotePairingKit"),',
+        1
+    )
+if 'github.com/mahee96/RemotePairingKit.git' not in package or '.product(name: "OpenSSL", package: "RemotePairingKit")' not in package:
+    raise SystemExit('FATAL[A7]: OpenSSL direct dependency missing')
 open(package_path, 'w', encoding='utf-8').write(package)
 
 api = open(api_path, encoding='utf-8').read()

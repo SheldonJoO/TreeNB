@@ -634,6 +634,9 @@ fi
 if grep -q 'import LibimobiledeviceGateway' "$MM_API_SRC"; then
   echo "致命错误: MinimuxerApi 仍导入 C gateway。" >&2; exit 1
 fi
+grep -q '\.product(name: "OpenSSL", package: "RemotePairingKit")' "$MM_PKG_SRC" || {
+  echo "致命错误: Minimuxer 缺少直接 OpenSSL 依赖，ZSign 会找不到 openssl/ocsp.h。" >&2; exit 1
+}
 python3 - "$IDVG_SRC" <<'PYB1ERRVERIFY'
 import re
 import sys
